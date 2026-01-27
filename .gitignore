@@ -1,0 +1,8 @@
+*.backup.*
+*.temp.*
+output_*
+model_*
+prog
+archive_*
+archive
+__pycache__
