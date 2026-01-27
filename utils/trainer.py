@@ -110,7 +110,7 @@ class Trainer:
         self.momentum_model.load_state_dict(self.model.state_dict())
 
         self.lambda_param = torch.nn.Parameter(
-            torch.tensor(float(self.config.REGULAR_RATIO), device=self.config.DEVICE)
+            torch.tensor(0.0, device=self.config.DEVICE)
         )
 
         for param in self.momentum_model.parameters():
@@ -133,13 +133,6 @@ class Trainer:
         self.train_avg_prototypes = None
         self.train_geo_prototypes = None
         self.train_weight_prototypes = None
-
-        self.kappa_proto_regular_ratio = 0.5
-        self.eps = 1e-8
-
-        self.ema_kappa = None
-        self.ema_proto = None
-        self.ema_decay = 0.99
 
     def _is_dominated(self, new_point, existing_point):
         b_new, m_new = new_point["binary_f1"], new_point["macro_f1"]
@@ -553,7 +546,11 @@ class Trainer:
                 .cpu()
                 .numpy()
             )
-            log.print(f"Current Lambda: {current_lambda:.4f}")
+            log.print(
+                f"Lambda (raw): {self.lambda_param.item():.4f} | "
+                f"Lambda (effective): {current_lambda:.4f}"
+            )
+
             log.print(
                 f"Train: Combined Loss: {avg_train_combined_loss:.4f} | "
                 f"Kappa Loss: {avg_train_kappa_loss:.4f} | "

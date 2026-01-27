@@ -8,11 +8,11 @@ from datasets import load_dataset
 from utils.config import ModelConfig
 from utils.logger import log
 
-SUBSET_NAME = "bigvul"
+SUBSET_NAME = "megavul"
 DATASET_NAME = "codemetic/AEGIS"
 
 # Fill your device here. "cpu","cuda:0","cuda:1", etc.
-DEVICE = "cuda:0"
+DEVICE = "cuda:2"
 LAYERS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
 
 # Output directory
