@@ -6,18 +6,14 @@ def kappa_loss(logits, classes):
     return F.cross_entropy(logits, classes)
 
 
-def prototype_loss(
-    embeddings: torch.Tensor,  # (N, D)
-    classes: torch.Tensor,  # (N,)
-    prototypes: torch.Tensor,  # (C, D)
-    temperature: float = 1.0,
+def prototype_consistency_loss(
+    weight_proto: torch.Tensor,
+    geo_proto: torch.Tensor,
 ):
+    weight_proto = F.normalize(weight_proto, dim=1)
+    geo_proto = F.normalize(geo_proto, dim=1)
 
-    embeddings = F.normalize(embeddings, dim=1)
-    prototypes = F.normalize(prototypes, dim=1)
-
-    # logits: (N, C)
-    logits = torch.matmul(embeddings, prototypes.t()) / temperature
-
-    loss = F.cross_entropy(logits, classes)
+    # cosine similarity per class
+    cos_sim = torch.sum(weight_proto * geo_proto, dim=1)
+    loss = 1.0 - cos_sim.mean()
     return loss

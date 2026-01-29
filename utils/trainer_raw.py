@@ -25,7 +25,7 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import prototype_consistency_loss, kappa_loss
+from utils.loss import prototype_loss, kappa_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     compute_class_separation_index,
@@ -105,16 +105,10 @@ class Trainer:
         for param in self.momentum_model.parameters():
             param.requires_grad = False
 
-        self.log_lambda_ppc = torch.nn.Parameter(
-            torch.zeros(1, device=self.config.DEVICE)
-        )
-
         # 优化器：为 gamma 使用更低学习率
         optimizer_params = [
             {"params": self.model.parameters()},
-            {"params": [self.log_lambda_ppc], "lr": self.config.LEARNING_RATE},
         ]
-
         self.optimizer = torch.optim.AdamW(
             optimizer_params,
             lr=self.config.LEARNING_RATE,
@@ -420,6 +414,9 @@ class Trainer:
                     device=self.config.DEVICE,
                 )
 
+                weight_prototypes = F.normalize(
+                    self.model.kappaface_head.weight.detach(), dim=1
+                )
                 num_samples_in_epoch += batch_size
                 with autocast(device_type="cuda"):
                     features_norm, logits = self.model(
@@ -429,18 +426,8 @@ class Trainer:
                         self.current_margins,
                     )
                     loss_kappa = kappa_loss(logits, truth_class_indices)
-                    # ===== Prototype–Prototype Consistency =====
-                    lambda_ppc = torch.exp(self.log_lambda_ppc.float())
-                    geo_prototypes = global_geo_prototypes
-                    weight_prototypes = F.normalize(
-                        self.model.kappaface_head.weight.detach(), dim=1
-                    )
-                    loss_ppc = prototype_consistency_loss(
-                        geo_prototypes,
-                        weight_prototypes,
-                    )
 
-                    loss = loss_kappa + lambda_ppc * loss_ppc
+                    loss = loss_kappa
 
                 self.optimizer.zero_grad()
                 self.scaler.scale(loss).backward()
@@ -498,12 +485,6 @@ class Trainer:
                 .detach()
                 .cpu()
                 .numpy()
-            )
-
-            log.print(
-                f"ppc/loss: {loss_ppc.item()}",
-                f"ppc/lambda: {lambda_ppc.item()}",
-                f"ppc/log_lambda: {self.log_lambda_ppc.item()}",
             )
 
             log.print(

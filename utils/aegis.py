@@ -161,10 +161,9 @@ class AEGISModel(nn.Module):
         num_classes: int,
         s,
         m0,
-        layers_to_concat: Tuple[int, ...],
     ):
         super().__init__()
-        self.encoder = RoBERTaEncoder(model_name, layers_to_concat)
+        self.encoder = RoBERTaEncoder(model_name, (8, 9, 10, 11))
         self.feature_dim = self.encoder.feature_dim
         self.kappaface_head = KappaLossClassifierHead(
             self.encoder.feature_dim, num_classes, s, m0

@@ -14,8 +14,6 @@ class ModelConfig:
         model_name: str,
         # ===== 训练配置 =====
         max_checkpoints: int,
-        # ===== 模型层配置 =====
-        roberta_layers_to_concat: Tuple[int, ...],
         # ===== 超参数 =====
         max_length: int,
         batch_size: int,
@@ -30,7 +28,6 @@ class ModelConfig:
         m0: float,
         s: float,
         momentum: float,
-        regular_ratio: float,
         # ===== 设备 =====
         device: torch.device,
         # ===== 输出目录 =====
@@ -47,9 +44,6 @@ class ModelConfig:
         # 训练
         self.MAX_CHECKPOINTS = max_checkpoints
 
-        # 模型层
-        self.ROBERTA_LAYERS_TO_CONCAT = roberta_layers_to_concat
-
         # 超参数
         self.MAX_LENGTH = max_length
         self.BATCH_SIZE = batch_size
@@ -65,7 +59,6 @@ class ModelConfig:
         self.M0 = m0
         self.S = s
         self.MOMENTUM = momentum
-        self.REGULAR_RATIO = regular_ratio
 
         # 设备
         self.DEVICE = device

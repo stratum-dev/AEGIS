@@ -8,12 +8,11 @@ from datasets import load_dataset
 from utils.config import ModelConfig
 from utils.logger import log
 
-SUBSET_NAME = "megavul"
+SUBSET_NAME = "megavul-mini"
 DATASET_NAME = "codemetic/AEGIS"
 
 # Fill your device here. "cpu","cuda:0","cuda:1", etc.
-DEVICE = "cuda:2"
-LAYERS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+DEVICE = "cuda:1"
 
 # Output directory
 OUTPUT_MODEL_DIR = f"model_{SUBSET_NAME}_{time.strftime('%Y%m%d-%H-%M-%S')}"
@@ -41,7 +40,6 @@ def main():
         dataset_name=DATASET_NAME,
         model_name="microsoft/unixcoder-base",
         max_checkpoints=1,
-        roberta_layers_to_concat=LAYERS,
         max_length=512,
         batch_size=64,
         learning_rate=2e-5,
@@ -53,8 +51,7 @@ def main():
         temperature=0.2,
         m0=0.8,
         s=30,
-        regular_ratio=0.1,
-        momentum=0.999,
+        momentum=0.99,
         output_dir=OUTPUT_MODEL_DIR,
         device=DEVICE,
         prototype_heatmap_output_dir=PROTOTYPE_HEATMAP_OUTPUT_DIR,
@@ -64,6 +61,8 @@ def main():
     set_seed(config.RANDOM_SEED)
 
     log.print("🚀 Starting training from scratch...")
+    log.print(f"Saved on position: {OUTPUT_MODEL_DIR}")
+
     save_training_config(config)
 
     # Load data
