@@ -8,14 +8,14 @@ from datasets import load_dataset
 from utils.config import ModelConfig
 from utils.logger import log
 
-SUBSET_NAME = "megavul-mini"
+SUBSET_NAME = "megavul"
 DATASET_NAME = "codemetic/AEGIS"
 
 # Fill your device here. "cpu","cuda:0","cuda:1", etc.
-DEVICE = "cuda:1"
+DEVICE = "cuda:0"
 
 # Output directory
-OUTPUT_MODEL_DIR = f"model_{SUBSET_NAME}_{time.strftime('%Y%m%d-%H-%M-%S')}"
+OUTPUT_MODEL_DIR = f"model_aegis_{SUBSET_NAME}_{time.strftime('%Y%m%d-%H-%M-%S')}"
 os.makedirs(OUTPUT_MODEL_DIR, exist_ok=True)
 
 PROTOTYPE_HEATMAP_OUTPUT_DIR = os.path.join(
@@ -48,10 +48,10 @@ def main():
         early_stopping_patience=100,
         random_seed=42,
         gamma=0.7,
-        temperature=0.2,
+        temperature=0.1,
         m0=0.8,
-        s=30,
-        momentum=0.99,
+        s=35,
+        momentum=0.999,
         output_dir=OUTPUT_MODEL_DIR,
         device=DEVICE,
         prototype_heatmap_output_dir=PROTOTYPE_HEATMAP_OUTPUT_DIR,

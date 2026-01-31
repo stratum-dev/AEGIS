@@ -25,7 +25,7 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import prototype_consistency_loss, kappa_loss, pcgrad_backward
+from utils.loss import prototype_consistency_loss, kappa_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     compute_class_separation_index,
@@ -106,9 +106,14 @@ class Trainer:
         for param in self.momentum_model.parameters():
             param.requires_grad = False
 
+        self.log_lambda_ppc = torch.nn.Parameter(
+            torch.zeros(1, device=self.config.DEVICE)
+        )
+
         # 优化器：为 gamma 使用更低学习率
         optimizer_params = [
             {"params": self.model.parameters()},
+            {"params": [self.log_lambda_ppc], "lr": self.config.LEARNING_RATE},
         ]
 
         self.optimizer = torch.optim.AdamW(
@@ -360,15 +365,14 @@ class Trainer:
         )
 
         for epoch in range(self.start_epoch, self.config.MAX_EPOCHS):
-            total_ppc_loss = 0.0
-            total_kappa_loss = 0.0
-            total_pseudo_loss = 0.0
-
             log.print(
                 f"\nEpoch {epoch + 1}/{self.config.MAX_EPOCHS} - At {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
             epoch_start_time = time.time()
             self.model.train()
+
+            total_kappa_loss = 0.0
+            total_combined_loss = 0.0
 
             momentum_embeddings = []
             momentum_truth_classes = []
@@ -404,6 +408,7 @@ class Trainer:
                 momentum_embeddings, momentum_truth_classes
             )
 
+            total_loss = 0.0
             num_samples_in_epoch = 0
             progress_bar = tqdm(train_loader, desc="Training")
             batch_start_time = time.time()
@@ -426,7 +431,7 @@ class Trainer:
                     )
                     loss_kappa = kappa_loss(logits, truth_class_indices)
                     # ===== Prototype–Prototype Consistency =====
-
+                    lambda_ppc = torch.exp(self.log_lambda_ppc.float())
                     geo_prototypes = global_geo_prototypes
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
@@ -436,15 +441,12 @@ class Trainer:
                         weight_prototypes,
                     )
 
-                    losses = {
-                        "kappa": loss_kappa,
-                        "ppc": loss_ppc,
-                    }
+                    loss = loss_kappa + lambda_ppc * loss_ppc
 
-                    pcgrad_backward(losses, self.optimizer, self.scaler)
-                    self.scaler.unscale_(self.optimizer)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                self.optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
 
                 with torch.no_grad():
                     for param_q, param_k in zip(
@@ -455,17 +457,10 @@ class Trainer:
                             + (1 - self.config.MOMENTUM) * param_q.data
                         )
 
-                pseudo_combined_loss = loss_kappa + loss_ppc
+                total_loss += loss.item()
                 total_kappa_loss += loss_kappa.item()
-                total_ppc_loss += loss_ppc.item()
-                total_pseudo_loss += pseudo_combined_loss.item()
-
-                progress_bar.set_postfix(
-                    {
-                        "kappa": loss_kappa.item(),
-                        "ppc": loss_ppc.item(),
-                    }
-                )
+                total_combined_loss += loss.item()
+                progress_bar.set_postfix({"loss": loss.item()})
 
             train_duration = time.time() - batch_start_time
             avg_sample_time_ms = (
@@ -476,6 +471,7 @@ class Trainer:
             epoch_duration = time.time() - epoch_start_time
             num_batches = len(train_loader)
             avg_train_kappa_loss = total_kappa_loss / num_batches
+            avg_train_combined_loss = total_combined_loss / num_batches
 
             (
                 self.train_avg_prototypes,
@@ -506,9 +502,14 @@ class Trainer:
             )
 
             log.print(
-                f"Combined Loss: {total_pseudo_loss/num_batches:.4f} | "
-                f"Kappa Loss: {avg_train_kappa_loss:.4f} | "
-                f"PPC Loss: {total_ppc_loss / num_batches:.4f}"
+                f"ppc/loss: {loss_ppc.item()}",
+                f"ppc/lambda: {lambda_ppc.item()}",
+                f"ppc/log_lambda: {self.log_lambda_ppc.item()}",
+            )
+
+            log.print(
+                f"Train: Combined Loss: {avg_train_combined_loss:.4f} | "
+                f"Kappa Loss: {avg_train_kappa_loss:.4f}"
             )
 
             log.print(
