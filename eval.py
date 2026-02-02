@@ -59,8 +59,8 @@ def parse_args():
     parser.add_argument(
         "--model_name",
         type=str,
-        default="codemetic/CweBERT-mlm",
-        help="Pretrained model name (default: codemetic/CweBERT-mlm)",
+        default="microsoft/unixcoder-base",
+        help="Pretrained model name (default: unixcoder-base)",
     )
     parser.add_argument(
         "--device",

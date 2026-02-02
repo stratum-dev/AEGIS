@@ -9,8 +9,8 @@ from utils.dataset import VulnerabilityDataset
 from utils.trainer import Trainer
 from utils.config import ModelConfig
 
-RESUME_OUTPUT_DIR = "output_megavul_20240112-23-10-55"  # 训练目录
-RESUME_FROM_EPOCH = 120  # pareto_checkpoint_epoch_{EPOCH}.pth
+RESUME_OUTPUT_DIR = "/home/MHFangGPU/AEGIS/result/model_aegis_megavul_20260201-16-52-44"  # 训练目录
+RESUME_FROM_EPOCH = 21  # pareto_checkpoint_epoch_{EPOCH}.pth
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -58,7 +58,7 @@ def main():
     # -----------------------------
     trainer = Trainer(
         train_dataset=train_dataset,
-        val_dataset=val_dataset,
+        val_dataset=test_dataset,
         test_dataset=test_dataset,
         config=config,
     )

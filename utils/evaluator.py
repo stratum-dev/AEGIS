@@ -20,6 +20,7 @@ class Evaluator:
         self.config = config
         self.model = None
         self.geo_prototypes = None
+        self.weight_prototypes = None
         self.idx_to_class = None
         self.test_loader = None
         self.test_size = 0
@@ -47,7 +48,6 @@ class Evaluator:
             num_classes,
             saved_config.M0,
             saved_config.S,
-            saved_config.ROBERTA_LAYERS_TO_CONCAT,
         ).to(self.config.DEVICE)
         self.model.load_state_dict(full_checkpoint["model_state_dict"], strict=True)
         self.model.eval()
@@ -55,7 +55,11 @@ class Evaluator:
         self.geo_prototypes = full_checkpoint["train_geo_prototypes"].to(
             self.config.DEVICE
         )
+        self.weight_prototypes = full_checkpoint["train_weight_prototypes"].to(
+            self.config.DEVICE
+        )
         print(f"Loaded geo_prototypes of shape: {self.geo_prototypes.shape}")
+        print(f"Loaded weight_prototypes of shape: {self.weight_prototypes.shape}")
 
     def prepare_data(self):
         """准备评估数据集"""
@@ -166,6 +170,14 @@ class Evaluator:
             self.idx_to_class,
             self.config.EVALUATION_OUTPUT_DIR,
             "prototype-heatmap.svg",
+            f"{self.config.SUBSET_NAME} - Evaluation",
+        )
+        VisualizationHelper.draw_geo_weight_prototype_similarity_matrix(
+            self.geo_prototypes,
+            self.weight_prototypes,
+            self.idx_to_class,
+            self.config.EVALUATION_OUTPUT_DIR,
+            "geo-weight-prototype-sim.svg",
             f"{self.config.SUBSET_NAME} - Evaluation",
         )
 
