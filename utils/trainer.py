@@ -433,12 +433,12 @@ class Trainer:
                     loss_kappa = kappa_loss(logits, truth_class_indices)
                     # ===== Prototype–Prototype Consistency =====
                     lambda_ppc = torch.exp(self.log_lambda_ppc.float())
-                    geo_prototypes = global_geo_prototypes
+                    avg_prototypes = global_avg_prototypes
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
                     )
                     loss_ppc = prototype_consistency_loss(
-                        geo_prototypes,
+                        avg_prototypes,
                         weight_prototypes,
                     )
 
