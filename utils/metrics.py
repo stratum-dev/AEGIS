@@ -180,20 +180,13 @@ class MetricCalculator:
             # GT: Non-vulnerable
             # =========================
             if not true_label:
-                if pred_idx != -1:
-                    pred_label, _ = idx_to_class[pred_idx]
-                    if not pred_label:
-                        end2end_correct += 1
-                else:
-                    # rejected → treated as non-vul
+                pred_label, _ = idx_to_class[pred_idx]
+                if not pred_label:
                     end2end_correct += 1
-                continue
 
             # =========================
             # GT: Vulnerable
             # =========================
-            if pred_idx == -1:
-                continue  # reject → wrong
 
             pred_label, pred_cwe = idx_to_class[pred_idx]
 

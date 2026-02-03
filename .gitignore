@@ -6,3 +6,4 @@ prog
 archive_*
 archive
 __pycache__
+temp
