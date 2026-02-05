@@ -8,7 +8,7 @@ from datasets import load_dataset
 from utils.config import ModelConfig
 from utils.logger import log
 
-SUBSET_NAME = "megavul"
+SUBSET_NAME = "reveal"
 DATASET_NAME = "codemetic/AEGIS"
 
 # Fill your device here. "cpu","cuda:0","cuda:1", etc.
@@ -47,7 +47,7 @@ def main():
         max_epochs=1000,
         early_stopping_patience=100,
         random_seed=42,
-        gamma=0.9,
+        gamma=0.7,
         temperature=0.2,
         m0=0.8,
         s=20,

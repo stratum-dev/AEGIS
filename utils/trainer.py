@@ -25,7 +25,11 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import prototype_consistency_loss, kappa_loss
+from utils.loss import (
+    prototype_consistency_loss,
+    kappa_loss,
+    vmf_prototype_dispersion_loss,
+)
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     compute_class_separation_index,
@@ -88,6 +92,7 @@ class Trainer:
         self.pareto_front = []
         self.pareto_patience_counter = 0
         self.current_margins = 0
+        self.current_psis = []
 
         self.model = AEGISModel(
             self.config.MODEL_NAME,
@@ -107,14 +112,12 @@ class Trainer:
         for param in self.momentum_model.parameters():
             param.requires_grad = False
 
-        self.log_lambda_ppc = torch.nn.Parameter(
-            torch.zeros(1, device=self.config.DEVICE)
-        )
+        self.log_lambda_reg = torch.nn.Parameter(torch.tensor(1.0,device=config.DEVICE))
 
         # 优化器：为 gamma 使用更低学习率
         optimizer_params = [
             {"params": self.model.parameters()},
-            {"params": [self.log_lambda_ppc], "lr": self.config.LEARNING_RATE},
+            {"params": [self.log_lambda_reg], "lr": self.config.LEARNING_RATE},
         ]
 
         self.optimizer = torch.optim.AdamW(
@@ -152,40 +155,51 @@ class Trainer:
             if k in self.class_to_index
         }
 
-    def _compute_dynamic_margins(self, embeddings_or_buffer, labels):
+    def _compute_dynamic_params(self, embeddings, labels):
         margins = torch.zeros(self.num_classes, device=self.config.DEVICE)
-        kappas = []
+        psis = torch.zeros(self.num_classes, device=self.config.DEVICE)
         class_r = {}
+        kappas = []
 
         for c in range(self.num_classes):
             mask = labels == c
+
             if mask.sum() == 0:
-                kappas.append(1e-6)
+                kappas.append(torch.tensor(1e-6, device=self.config.DEVICE))
                 class_r[c] = 0.0
                 continue
-            class_embs = embeddings_or_buffer[mask]
+            class_embs = embeddings[mask]
             kappa = estimate_vmf_concentration(class_embs)
+            if not torch.is_tensor(kappa):
+                kappa = torch.tensor(kappa, device=self.config.DEVICE)
             kappas.append(kappa)
-            class_r[c] = torch.norm(torch.mean(class_embs, dim=0)).item()
+            class_r[c] = torch.norm(class_embs.mean(dim=0)).item()
+        kappas = torch.stack(kappas)  # (C,)
 
-        kappas = np.array(kappas)
+        # z-score normalization
         if len(kappas) > 1:
-            mu_k = np.mean(kappas)
-            sigma_k = np.std(kappas) + 1e-8
+            mu_k = kappas.mean()
+            sigma_k = kappas.std() + 1e-8
             kappas_norm = (kappas - mu_k) / sigma_k
         else:
-            kappas_norm = np.zeros_like(kappas)
+            kappas_norm = torch.zeros_like(kappas)
 
         gamma = self.config.GAMMA
 
         for c in range(self.num_classes):
-            omega_k = 1.0 / (1.0 + math.exp(kappas_norm[c] / self.config.TEMPERATURE))
+            omega_k = 1.0 / (1.0 + torch.exp(kappas_norm[c] / self.config.TEMPERATURE))
+
             n_c = self.class_counts.get(c, 1)
             omega_n = self.max_count / n_c
-            m_c = self.config.M0 * (gamma * omega_k + (1 - gamma) * omega_n)
-            margins[c] = m_c
 
-        return margins
+            psi = gamma * omega_k + (1 - gamma) * omega_n
+
+            m_c = self.config.M0 * psi
+            margins[c] = m_c
+            psis[c] = psi
+
+        return margins, psis
+
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -374,6 +388,7 @@ class Trainer:
 
             total_kappa_loss = 0.0
             total_combined_loss = 0.0
+            total_pdr_loss = 0.0
 
             momentum_embeddings = []
             momentum_truth_classes = []
@@ -393,14 +408,19 @@ class Trainer:
             momentum_truth_classes = torch.tensor(
                 momentum_truth_classes, device=self.config.DEVICE
             )
-            if epoch == 0:
-                self.current_margins = torch.full(
-                    (self.num_classes,), self.config.M0, device=self.config.DEVICE
-                ).detach()
-            else:
-                self.current_margins = self._compute_dynamic_margins(
-                    momentum_embeddings, momentum_truth_classes
-                ).detach()
+            # if epoch == 0:
+            #     self.current_margins = torch.full(
+            #         (self.num_classes,), self.config.M0, device=self.config.DEVICE
+            #     ).detach()
+            #     self.current_kappas_norm = torch.tensor(
+            #         [0.0] * self.num_classes, device=self.config.DEVICE
+            #     )
+            # else:
+            dynamic_param = self._compute_dynamic_params(
+                momentum_embeddings, momentum_truth_classes
+            )
+            self.current_margins = dynamic_param[0].detach()
+            self.current_psis = dynamic_param[1].detach()
 
             global_avg_prototypes = self._compute_average_prototypes(
                 momentum_embeddings, momentum_truth_classes
@@ -433,17 +453,17 @@ class Trainer:
                     )
                     loss_kappa = kappa_loss(logits, truth_class_indices)
                     # ===== Prototype–Prototype Consistency =====
-                    lambda_ppc = torch.exp(self.log_lambda_ppc.float())
+                    lambda_reg = torch.exp(self.log_lambda_reg.float())
                     avg_prototypes = global_avg_prototypes
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
                     )
-                    loss_ppc = prototype_consistency_loss(
+                    psis = self.current_psis
+                    loss_disp = vmf_prototype_dispersion_loss(
                         avg_prototypes,
-                        weight_prototypes,
+                        psis,
                     )
-
-                    loss = loss_kappa + lambda_ppc * loss_ppc
+                    loss = loss_kappa + lambda_reg * loss_disp
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -460,6 +480,7 @@ class Trainer:
 
                 total_loss += loss.item()
                 total_kappa_loss += loss_kappa.item()
+                total_pdr_loss += loss_disp.item()
                 total_combined_loss += loss.item()
                 progress_bar.set_postfix({"loss": loss.item()})
 
@@ -472,6 +493,7 @@ class Trainer:
             epoch_duration = time.time() - epoch_start_time
             num_batches = len(train_loader)
             avg_train_kappa_loss = total_kappa_loss / num_batches
+            avg_train_pdr_loss = total_pdr_loss / num_batches
             avg_train_combined_loss = total_combined_loss / num_batches
 
             (
@@ -503,14 +525,9 @@ class Trainer:
             )
 
             log.print(
-                f"ppc/loss: {loss_ppc.item()}",
-                f"ppc/lambda: {lambda_ppc.item()}",
-                f"ppc/log_lambda: {self.log_lambda_ppc.item()}",
-            )
-
-            log.print(
                 f"Train: Combined Loss: {avg_train_combined_loss:.4f} | "
-                f"Kappa Loss: {avg_train_kappa_loss:.4f}"
+                f"Kappa Loss: {avg_train_kappa_loss:.4f} | "
+                f"PDR/loss: {avg_train_pdr_loss:.4f} | PDR/lambda: {lambda_reg.item()} | PDR/log_lambda: {self.log_lambda_reg.item()}",
             )
 
             log.print(
