@@ -103,6 +103,7 @@ class Trainer:
             self.config.M0,
         ).to(self.config.DEVICE)
         self.momentum_model.load_state_dict(self.model.state_dict())
+        self.momentum_model.eval()
         for param in self.momentum_model.parameters():
             param.requires_grad = False
 

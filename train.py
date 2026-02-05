@@ -8,11 +8,11 @@ from datasets import load_dataset
 from utils.config import ModelConfig
 from utils.logger import log
 
-SUBSET_NAME = "draper"
+SUBSET_NAME = "megavul"
 DATASET_NAME = "codemetic/AEGIS"
 
 # Fill your device here. "cpu","cuda:0","cuda:1", etc.
-DEVICE = "cuda:2"
+DEVICE = "cuda:1"
 
 # Output directory
 OUTPUT_MODEL_DIR = f"model_aegis_{SUBSET_NAME}_{time.strftime('%Y%m%d-%H-%M-%S')}"
@@ -47,10 +47,10 @@ def main():
         max_epochs=1000,
         early_stopping_patience=100,
         random_seed=42,
-        gamma=0.7,
+        gamma=0.9,
         temperature=0.2,
         m0=0.8,
-        s=10,
+        s=20,
         momentum=0.99,
         output_dir=OUTPUT_MODEL_DIR,
         device=DEVICE,
