@@ -578,7 +578,7 @@ class Trainer:
                 f"Epoch {epoch} Finished at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
             )
 
-            if epoch > self.train_config.MAX_EPOCHES:
+            if epoch >= self.train_config.MAX_EPOCHES:
                 log.print(
                     f"🛑 Stopping triggered after reaching max epoches: {self.train_config.MAX_EPOCHES}."
                 )

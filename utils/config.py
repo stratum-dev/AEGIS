@@ -74,29 +74,19 @@ class EvalConfig:
     def __init__(
         self,
         model_dir: str,
-        subset_name: str,
-        backbone_repo: str,
         checkpoint: int,
-        dataset_repo: str,
         batch_size: int,
-        random_seed: int,
         device: str,
     ):
         self.MODEL_DIR = model_dir
-        self.SUBSET_NAME = subset_name
         self.CHECKPOINT = checkpoint
         self.EVALUATION_OUTPUT_DIR = os.path.join(
             self.MODEL_DIR, "evaluations", f"evaluation-{checkpoint}"
         )
-
-        self.DATASET_REPO = dataset_repo
-        self.BACKBONE_REPO = backbone_repo
-        self.MAX_LENGTH = 512
         self.BATCH_SIZE = batch_size
 
         self.EVAL_SPLIT = "test"
 
         self.DEVICE = device
-        self.RANDOM_SEED = random_seed
 
         os.makedirs(self.EVALUATION_OUTPUT_DIR, exist_ok=True)

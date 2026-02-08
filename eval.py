@@ -4,96 +4,33 @@ import torch
 from utils.config import EvalConfig
 from utils.evaluator import Evaluator
 from utils.seed import set_seed
+from utils.file import list_all_subdirs
+import os
+from InquirerPy import inquirer
 
 warnings.filterwarnings("ignore")
 
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluate AEGIS model on a vulnerability dataset."
-    )
-
-    parser.add_argument(
-        "--model_dir",
-        type=str,
-        required=True,
-        help="Directory of saved checkpoints (e.g., output_megavul_20260111-17-43-19)",
-    )
-    parser.add_argument(
-        "--subset_name",
-        type=str,
-        required=True,
-        # choices=[
-        #     "bigvul",
-        #     "megavul",
-        #     "reposvul",
-        #     "draper",
-        #     "mvd",
-        #     "devign",
-        #     "reveal",
-        #     "vuldeepecker",
-        # ],
-        help="Dataset subset name",
-    )
-    parser.add_argument(
-        "--checkpoint",
-        type=int,
-        required=True,
-        help="Checkpoint epoch number to evaluate (e.g., 15)",
-    )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=16,
-        help="Batch size for inference (default: 32)",
-    )
-    parser.add_argument(
-        "--random_seed", type=int, default=42, help="Random seed (default: 42)"
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default="codemetic/AEGIS",
-        help="Hugging Face dataset name (default: codemetic/AEGIS)",
-    )
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default="microsoft/unixcoder-base",
-        help="Pretrained model name (default: unixcoder-base)",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="auto",
-        choices=["auto", "cuda", "cpu"],
-        help='Device to use: "auto" (default), "cuda", or "cpu"',
-    )
-
-    return parser.parse_args()
+MODEL_DIR = inquirer.select(
+    message="Select the model directory: ",
+    choices=list_all_subdirs(os.path.join(".", "models")),
+).execute()
+CHECKPOINT = inquirer.number(
+    message="Specify the epoch of checkpoint: ", float_allowed=False
+).execute()
+BATCH_SIZE = inquirer.number(
+    message="Batch size for evaluation: ", min_allowed=1, float_allowed=False
+).execute()
+DEVICE = inquirer.text(message="Device:", default="cuda").execute()
 
 
 def main():
-    args = parse_args()
-
-    # 自动选择设备
-    if args.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(args.device)
-
     config = EvalConfig(
-        batch_size=args.batch_size,
-        random_seed=args.random_seed,
-        model_dir=args.model_dir,
-        subset_name=args.subset_name,
-        backbone_repo=args.model_name,
-        dataset_repo=args.dataset_name,
-        checkpoint=args.checkpoint,
-        device=device,
+        batch_size=BATCH_SIZE,
+        model_dir=MODEL_DIR,
+        checkpoint=CHECKPOINT,
+        device=DEVICE,
     )
 
-    set_seed(config.RANDOM_SEED)
     evaluator = Evaluator(config)
     evaluator.evaluate()
     print("✅ Evaluation completed successfully!")

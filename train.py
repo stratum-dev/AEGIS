@@ -74,7 +74,7 @@ def main():
         early_stop_patience=EARLY_STOP_PATIENCE,
     )
 
-    save_to_json(model_config, os.path.join(OUTPUT_DIR,"model_config.json"))
+    save_to_json(model_config, os.path.join(OUTPUT_DIR, "model_config.json"))
 
     set_seed(RANDOM_SEED)
 
