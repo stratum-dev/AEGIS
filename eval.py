@@ -25,7 +25,7 @@ DEVICE = inquirer.text(message="Device:", default="cuda").execute()
 
 def main():
     config = EvalConfig(
-        batch_size=BATCH_SIZE,
+        batch_size=int(BATCH_SIZE),
         model_dir=MODEL_DIR,
         checkpoint=CHECKPOINT,
         device=DEVICE,

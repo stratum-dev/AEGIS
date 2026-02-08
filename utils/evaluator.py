@@ -1,13 +1,11 @@
 import json
 import os
 from typing import Any, Dict, List, Tuple
-
 import numpy as np
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import RobertaTokenizer
 from utils.config import EvalConfig, ModelConfig
 from utils.aegis import AEGISModel
 from utils.dataset import VulnerabilityDataset, custom_collate_fn
@@ -25,8 +23,9 @@ class Evaluator:
         self.idx_to_class = None
         self.test_loader = None
         self.testset_size = 0
+        self._load_model_and_checkpoint()
 
-    def load_model_and_checkpoint(self):
+    def _load_model_and_checkpoint(self):
         checkpoint_path = os.path.join(
             self.eval_config.MODEL_DIR,
             f"pareto_checkpoint_epoch_{self.eval_config.CHECKPOINT}.pth",
@@ -63,13 +62,11 @@ class Evaluator:
         )
 
     def prepare_data(self):
-        """准备评估数据集"""
-        tokenizer = RobertaTokenizer.from_pretrained(self.eval_config.BACKBONE_REPO)
-        test_data = load_dataset(self.eval_config.DATASET_REPO, self.eval_config.SUBSET_NAME)[
+        test_data = load_dataset(self.model_config.DATASET_REPO, self.model_config.SUBSET_NAME)[
             self.eval_config.EVAL_SPLIT
         ]
         test_dataset = VulnerabilityDataset(
-            test_data, tokenizer, self.model_config.MAX_LENGTH
+            test_data, self.model_config
         )
         self.test_loader = DataLoader(
             test_dataset,
@@ -164,14 +161,14 @@ class Evaluator:
             true_class_keys,
             self.eval_config.EVALUATION_OUTPUT_DIR,
             "umap.svg",
-            f"{self.eval_config.SUBSET_NAME} - Evaluation",
+            f"{self.model_config.SUBSET_NAME} - Evaluation",
         )
         VisualizationHelper.draw_prototype_similarity_matrix(
             self.geo_prototypes,
             self.idx_to_class,
             self.eval_config.EVALUATION_OUTPUT_DIR,
             "prototype-similarity.svg",
-            f"{self.eval_config.SUBSET_NAME} - Evaluation",
+            f"{self.model_config.SUBSET_NAME} - Evaluation",
         )
         VisualizationHelper.draw_prototype_alignment_matrix(
             self.geo_prototypes,
@@ -179,12 +176,11 @@ class Evaluator:
             self.idx_to_class,
             self.eval_config.EVALUATION_OUTPUT_DIR,
             "prototype-alignment.svg",
-            f"{self.eval_config.SUBSET_NAME} - Evaluation",
+            f"{self.model_config.SUBSET_NAME} - Evaluation",
         )
 
     def evaluate(self):
         """主评估流程"""
-        self.load_model_and_checkpoint()
         self.prepare_data()
         binary_metrics, cwe_metrics, embeddings, true_class_keys = self.run_evaluation()
         self.save_results(binary_metrics, cwe_metrics)
