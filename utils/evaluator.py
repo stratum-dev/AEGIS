@@ -165,14 +165,14 @@ class Evaluator:
             "umap.svg",
             f"{self.config.SUBSET_NAME} - Evaluation",
         )
-        VisualizationHelper.draw_prototype_heatmap(
+        VisualizationHelper.draw_prototype_similarity_matrix(
             self.geo_prototypes,
             self.idx_to_class,
             self.config.EVALUATION_OUTPUT_DIR,
             "prototype-heatmap.svg",
             f"{self.config.SUBSET_NAME} - Evaluation",
         )
-        VisualizationHelper.draw_geo_weight_prototype_similarity_matrix(
+        VisualizationHelper.draw_prototype_alignment_matrix(
             self.geo_prototypes,
             self.weight_prototypes,
             self.idx_to_class,

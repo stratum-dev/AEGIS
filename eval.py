@@ -87,8 +87,8 @@ def main():
         random_seed=args.random_seed,
         model_dir=args.model_dir,
         subset_name=args.subset_name,
-        model_name=args.model_name,
-        dataset_name=args.dataset_name,
+        backbone_repo=args.model_name,
+        dataset_repo=args.dataset_name,
         checkpoint=args.checkpoint,
         device=device,
     )

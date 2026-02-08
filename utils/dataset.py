@@ -1,17 +1,13 @@
 from typing import Dict, Any
 import torch
-from transformers import RobertaTokenizer, T5Tokenizer
+from transformers import AutoTokenizer
 from utils.config import ModelConfig
 
 
 class VulnerabilityDataset(torch.utils.data.Dataset):
     def __init__(self, data, config: ModelConfig):
         self.data = data
-        self.tokenizer = (
-            T5Tokenizer.from_pretrained(config.MODEL_NAME)
-            if "codet5" in config.MODEL_NAME
-            else RobertaTokenizer.from_pretrained(config.MODEL_NAME)
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(config.BACKBONE_REPO)
         self.max_length = config.MAX_LENGTH
 
     def __len__(self) -> int:

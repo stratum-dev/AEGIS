@@ -1,26 +1,22 @@
 from typing import Tuple
 import torch
-from transformers import T5Config, T5EncoderModel, RobertaConfig, RobertaModel
+from transformers import AutoConfig, AutoModelForTextEncoding
 import torch.nn as nn
 import torch.nn.functional as F
 from utils.calc import l2_norm
 
 
 class RoBERTaEncoder(nn.Module):
-    def __init__(self, model_name: str, layers_to_concat: Tuple[int, ...]):
+    def __init__(self, backbone_name: str, layers_to_concat: Tuple[int, ...]):
         super().__init__()
-        self.config = (
-            T5Config.from_pretrained(model_name, output_hidden_states=True)
-            if "codet5" in model_name
-            else RobertaConfig.from_pretrained(model_name, output_hidden_states=True)
+        self.backbone_config = AutoConfig.from_pretrained(
+            backbone_name, output_hidden_states=True
         )
-        self.roberta = (
-            T5EncoderModel.from_pretrained(model_name, config=self.config)
-            if "codet5" in model_name
-            else RobertaModel.from_pretrained(model_name, config=self.config)
+        self.roberta = AutoModelForTextEncoding.from_pretrained(
+            backbone_name, config=self.backbone_config
         )
         self.layers_to_concat = layers_to_concat
-        self.hidden_size = self.config.hidden_size
+        self.hidden_size = self.backbone_config.hidden_size
         self.feature_dim = self.hidden_size
 
         self.num_layers_to_use = len(layers_to_concat)

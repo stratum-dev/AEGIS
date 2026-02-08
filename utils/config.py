@@ -1,6 +1,4 @@
 import os
-from typing import Tuple
-import torch
 
 
 class ModelConfig:
@@ -8,49 +6,30 @@ class ModelConfig:
 
     def __init__(
         self,
-        # ===== 数据集配置 =====
         subset_name: str,
-        dataset_name: str,
-        model_name: str,
-        # ===== 训练配置 =====
-        max_checkpoints: int,
-        # ===== 超参数 =====
+        dataset_repo: str,
+        backbone_repo: str,
         max_length: int,
         batch_size: int,
         learning_rate: float,
         weight_decay: float,
-        max_epochs: int,
-        early_stopping_patience: int,
         random_seed: int,
-        # ===== Kappa / Prototype Loss =====
         gamma: float,
         temperature: float,
         m0: float,
         s: float,
         momentum: float,
-        # ===== 设备 =====
-        device: torch.device,
-        # ===== 输出目录 =====
-        output_dir: str,
-        prototype_heatmap_output_dir: str,
-        umap_output_dir: str,
-        prototype_similarity_output_dir: str,
     ):
         # 数据集
         self.SUBSET_NAME = subset_name
-        self.DATASET_NAME = dataset_name
-        self.MODEL_NAME = model_name
-
-        # 训练
-        self.MAX_CHECKPOINTS = max_checkpoints
+        self.DATASET_REPO = dataset_repo
+        self.BACKBONE_REPO = backbone_repo
 
         # 超参数
         self.MAX_LENGTH = max_length
         self.BATCH_SIZE = batch_size
         self.LEARNING_RATE = learning_rate
         self.WEIGHT_DECAY = weight_decay
-        self.MAX_EPOCHS = max_epochs
-        self.EARLY_STOPPING_PATIENCE = early_stopping_patience
         self.RANDOM_SEED = random_seed
 
         # Loss
@@ -60,14 +39,33 @@ class ModelConfig:
         self.S = s
         self.MOMENTUM = momentum
 
-        # 设备
-        self.DEVICE = device
 
-        # 输出目录
+class TrainConfig:
+    def __init__(
+        self,
+        device: str,
+        output_dir: str,
+        max_checkpoints: int,
+        max_epoches: int,
+        early_stop_patience: int,
+    ):
+        self.DEVICE = device
         self.OUTPUT_DIR = output_dir
-        self.PROTOTYPE_HEATMAP_OUTPUT_DIR = prototype_heatmap_output_dir
-        self.UMAP_OUTPUT_DIR = umap_output_dir
-        self.PROTOTYPE_SIMILARITY_OUTPUT_DIR = prototype_similarity_output_dir
+        self.PROTOTYPE_ALIGNMENT_OUTPUT_DIR = os.path.join(
+            self.OUTPUT_DIR, "val_prototype_alignment_matrix"
+        )
+        self.UMAP_OUTPUT_DIR = os.path.join(self.OUTPUT_DIR, "val_umap")
+        self.PROTOTYPE_SIMILARITY_OUTPUT_DIR = os.path.join(
+            self.OUTPUT_DIR, "val_prototype_similarity_matrix"
+        )
+        self.MAX_CHECKPOINTS = max_checkpoints
+        self.MAX_EPOCHES = max_epoches
+        self.EARLY_STOP_PATIENCE = early_stop_patience
+
+        os.makedirs(self.OUTPUT_DIR, exist_ok=True)
+        os.makedirs(self.PROTOTYPE_ALIGNMENT_OUTPUT_DIR, exist_ok=True)
+        os.makedirs(self.UMAP_OUTPUT_DIR, exist_ok=True)
+        os.makedirs(self.PROTOTYPE_SIMILARITY_OUTPUT_DIR, exist_ok=True)
 
 
 class EvalConfig:
@@ -77,33 +75,28 @@ class EvalConfig:
         self,
         model_dir: str,
         subset_name: str,
-        model_name: str,
+        backbone_repo: str,
         checkpoint: int,
-        dataset_name: str,
+        dataset_repo: str,
         batch_size: int,
         random_seed: int,
         device: str,
     ):
-        # 模型路径和检查点配置
         self.MODEL_DIR = model_dir
         self.SUBSET_NAME = subset_name
         self.CHECKPOINT = checkpoint
         self.EVALUATION_OUTPUT_DIR = os.path.join(
-            self.MODEL_DIR, f"evaluation-{checkpoint}"
+            self.MODEL_DIR, "evaluations", f"evaluation-{checkpoint}"
         )
 
-        # 数据集和模型配置
-        self.DATASET_NAME = dataset_name
-        self.MODEL_NAME = model_name
+        self.DATASET_REPO = dataset_repo
+        self.BACKBONE_REPO = backbone_repo
         self.MAX_LENGTH = 512
         self.BATCH_SIZE = batch_size
 
-        # 可视化配置
         self.EVAL_SPLIT = "test"
 
-        # 设备和随机种子
         self.DEVICE = device
         self.RANDOM_SEED = random_seed
 
-        # 创建输出目录
         os.makedirs(self.EVALUATION_OUTPUT_DIR, exist_ok=True)

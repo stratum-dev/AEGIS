@@ -1,112 +1,100 @@
 import os
-from utils.trainer import Trainer, save_training_config
+from utils.trainer import Trainer
+from utils.serialize import save_to_json
 from utils.seed import set_seed
 from utils.dataset import VulnerabilityDataset
 from datasets import load_dataset
-from utils.config import ModelConfig
+from utils.config import ModelConfig, TrainConfig
 from utils.logger import log
 
-# Subset name
-# "bigvul", "mvd", "megavul", "draper", "vuldeepecker", "reposvul"
-SUBSET_NAME = "reposvul"
-
-# Fill your device here. "cpu","cuda:0","cuda:1", etc.
-DEVICE = "cuda:2"
-
-# -------------- Huggingface Repo ---------------------------------
+# ============================ Huggingface Repo =================================
 # The dataset repository
-DATASET_NAME = "codemetic/AEGIS"
-
-# The RoBERTa or T5 based backbone repository
+DATASET_REPO = "codemetic/AEGIS"
+# Subset for above repo.
+# Avaliable at: "bigvul", "mvd", "megavul", "draper", "vuldeepecker", "reposvul"
+SUBSET_NAME = "primevul-paired"
+# The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
 # "Salesforce/codet5-base", "Salesforce/codet5p-220m", "Salesforce/codet5p-770m"
-MODEL_NAME = "Salesforce/codet5p-220m"
+BACKBONE_REPO = "Salesforce/codet5p-220m"
 
-# -------------- HyperParameters ----------------------------------
+# ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
 # Please refer the original paper to adjust the hyperparameters
 GAMMA = 0.7
 M0 = 0.8
-S = 20
-MOMENTUM = 0.99
+S = 30
+MOMENTUM = 0.999
 TEMPERATURE = 0.2
-
-# -------------- Training Settings---------------------------------
-RANDOM_SEED = 42
 BATCH_SIZE = 40
 LEARNING_RATE = 2e-5
 WEIGHT_DECAY = 1e-2
-MAX_EPOCHES = 1000
-EARLY_STOP_PATIENCE = 20
-
-# The max length for processed code sample,
-# depends on your Roberta backbone. 512 is default.
-# Normally you don't need to modify this parameter.
+RANDOM_SEED = 42
+# The max length for processed code sample, depends on your backbone. 512 is default.
+# Normally you DON'T need to modify this parameter.
 MAX_LENGTHS = 512
 
-# -------------- Output directory ---------------------------------
-OUTPUT_MODEL_DIR = f"model_aegis_{SUBSET_NAME}"
-os.makedirs(OUTPUT_MODEL_DIR, exist_ok=True)
-PROTOTYPE_HEATMAP_OUTPUT_DIR = os.path.join(
-    OUTPUT_MODEL_DIR, "val_geo_prototype_similarity"
+# ============================ Training Settings=================================
+# Fill your device here. "cuda","cuda:0","cuda:1","cuda:2", etc.
+# Mixed-precision relies on CUDA, and therefore training on CPU is NOT supported.
+DEVICE = "cuda:0"
+MAX_EPOCHES = 2
+EARLY_STOP_PATIENCE = 30
+MAX_CHECKPOINTS = 1
+OUTPUT_DIR = os.path.join(
+    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}"
 )
-os.makedirs(PROTOTYPE_HEATMAP_OUTPUT_DIR, exist_ok=True)
-UMAP_OUTPUT_DIR = os.path.join(OUTPUT_MODEL_DIR, "val_umap")
-os.makedirs(UMAP_OUTPUT_DIR, exist_ok=True)
-PROROTYPE_SIMILARITY_OUTPUT_DIR = os.path.join(
-    OUTPUT_MODEL_DIR, "val_geo_weight_prototype_similarity"
-)
-os.makedirs(PROROTYPE_SIMILARITY_OUTPUT_DIR, exist_ok=True)
-
-
-log.set_log_file(os.path.join(OUTPUT_MODEL_DIR, "train.log"))
 
 
 def main():
-    config = ModelConfig(
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    log.set_log_file(os.path.join(OUTPUT_DIR, "train.log"))
+    model_config = ModelConfig(
         subset_name=SUBSET_NAME,
-        dataset_name=DATASET_NAME,
-        model_name=MODEL_NAME,
-        max_checkpoints=1,
+        dataset_repo=DATASET_REPO,
+        backbone_repo=BACKBONE_REPO,
         max_length=MAX_LENGTHS,
         batch_size=BATCH_SIZE,
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
-        max_epochs=MAX_EPOCHES,
-        early_stopping_patience=EARLY_STOP_PATIENCE,
         random_seed=RANDOM_SEED,
         gamma=GAMMA,
         temperature=TEMPERATURE,
         m0=M0,
         s=S,
         momentum=MOMENTUM,
-        output_dir=OUTPUT_MODEL_DIR,
-        device=DEVICE,
-        prototype_heatmap_output_dir=PROTOTYPE_HEATMAP_OUTPUT_DIR,
-        umap_output_dir=UMAP_OUTPUT_DIR,
-        prototype_similarity_output_dir=PROROTYPE_SIMILARITY_OUTPUT_DIR,
     )
-    set_seed(config.RANDOM_SEED)
+
+    train_config = TrainConfig(
+        device=DEVICE,
+        output_dir=OUTPUT_DIR,
+        max_checkpoints=MAX_CHECKPOINTS,
+        max_epoches=MAX_EPOCHES,
+        early_stop_patience=EARLY_STOP_PATIENCE,
+    )
+
+    save_to_json(model_config, os.path.join(OUTPUT_DIR,"model_config.json"))
+
+    set_seed(RANDOM_SEED)
 
     log.print("🚀 Starting training from scratch...")
-    log.print(f"Saved on position: {OUTPUT_MODEL_DIR}")
-
-    save_training_config(config)
+    log.print(f"Saved on position: {OUTPUT_DIR}")
 
     # Load data
-    dataset = load_dataset(config.DATASET_NAME, config.SUBSET_NAME)
+    dataset = load_dataset(model_config.DATASET_REPO, model_config.SUBSET_NAME)
     train_data, val_data, test_data = dataset["train"], dataset["val"], dataset["test"]
 
-    train_dataset = VulnerabilityDataset(train_data, config)
-    val_dataset = VulnerabilityDataset(val_data, config)
-    test_dataset = VulnerabilityDataset(test_data, config)
+    train_dataset = VulnerabilityDataset(train_data, model_config)
+    val_dataset = VulnerabilityDataset(val_data, model_config)
+    test_dataset = VulnerabilityDataset(test_data, model_config)
 
     trainer = Trainer(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
         test_dataset=test_dataset,
-        config=config,
+        train_config=train_config,
+        model_config=model_config,
     )
     log.print(f"Total classes: {trainer.num_classes}")
     trainer.train()

@@ -72,7 +72,7 @@ class VisualizationHelper:
         plt.close()
 
     @staticmethod
-    def draw_prototype_heatmap(
+    def draw_prototype_similarity_matrix(
         prototypes: torch.Tensor,
         idx_to_class: Dict[int, Tuple[bool, str]],
         output_dir: str,
@@ -124,7 +124,7 @@ class VisualizationHelper:
         plt.close()
 
     @staticmethod
-    def draw_geo_weight_prototype_similarity_matrix(
+    def draw_prototype_alignment_matrix(
         geo_prototypes: torch.Tensor,
         weight_prototypes: torch.Tensor,
         idx_to_class: Dict[int, Tuple[bool, str]],

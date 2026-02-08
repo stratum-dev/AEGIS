@@ -2,6 +2,7 @@
 *.temp.*
 output_*
 model_*
+models
 prog
 archive_*
 archive

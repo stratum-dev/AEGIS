@@ -2,7 +2,7 @@ import glob
 import os
 import torch
 from utils.aegis import AEGISModel
-from utils.config import ModelConfig
+from utils.config import ModelConfig,EvalConfig
 
 
 def save_checkpoint_with_limit(
@@ -12,7 +12,7 @@ def save_checkpoint_with_limit(
     weight_proto,
     class_to_idx,
     idx_to_class,
-    config: ModelConfig,
+    model_config: ModelConfig,
     epoch,
     output_dir,
     max_checkpoints=20,
@@ -20,14 +20,14 @@ def save_checkpoint_with_limit(
     checkpoint_path = os.path.join(output_dir, f"pareto_checkpoint_epoch_{epoch}.pth")
     torch.save(
         {
-            "config": config,
+            "config": model_config,
             "model_state_dict": model.state_dict(),
             "train_avg_prototypes": avg_proto.cpu(),
             "train_geo_prototypes": geo_proto.cpu(),
             "train_weight_prototypes": weight_proto.cpu(),
             "class_to_idx": class_to_idx,
             "idx_to_class": idx_to_class,
-            "epoch": epoch + 1,
+            "epoch": epoch,
         },
         checkpoint_path,
     )
@@ -49,7 +49,7 @@ def save_checkpoint_with_limit(
         os.remove(checkpoints[0])
 
 
-def load_model_and_checkpoints(config: ModelConfig):
+def load_model_and_checkpoints(config: EvalConfig):
     """加载模型和检查点"""
     print(f"Loading model from: {config.MODEL_DIR}")
     model_path = os.path.join(
@@ -68,7 +68,7 @@ def load_model_and_checkpoints(config: ModelConfig):
 
     # 构建模型
     model = AEGISModel(
-        config.MODEL_NAME,
+        config.BACKBONE_REPO,
         num_classes,
         config.M0,
         config.S,

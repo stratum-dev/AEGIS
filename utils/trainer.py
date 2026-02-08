@@ -1,7 +1,5 @@
 from datetime import datetime
-import json
 import math
-import os
 import time
 import warnings
 from collections import Counter
@@ -20,7 +18,7 @@ from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-from utils.config import ModelConfig
+from utils.config import ModelConfig, TrainConfig
 from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
@@ -39,38 +37,18 @@ from utils.logger import log
 warnings.filterwarnings("ignore")
 
 
-def save_training_config(config: ModelConfig):
-    config_dict = {
-        "SUBSET_NAME": config.SUBSET_NAME,
-        "DATASET_NAME": config.DATASET_NAME,
-        "MODEL_NAME": config.MODEL_NAME,
-        "MAX_LENGTH": config.MAX_LENGTH,
-        "BATCH_SIZE": config.BATCH_SIZE,
-        "LEARNING_RATE": config.LEARNING_RATE,
-        "WEIGHT_DECAY": config.WEIGHT_DECAY,
-        "MAX_EPOCHS": config.MAX_EPOCHS,
-        "EARLY_STOPPING_PATIENCE": config.EARLY_STOPPING_PATIENCE,
-        "RANDOM_SEED": config.RANDOM_SEED,
-        "GAMMA": config.GAMMA,
-        "TEMPERATURE": config.TEMPERATURE,
-        "M0": config.M0,
-        "S": config.S,
-        "MOMENTUM": config.MOMENTUM,
-        "DEVICE": str(config.DEVICE),
-    }
-    with open(os.path.join(config.OUTPUT_DIR, "training_config.json"), "w") as f:
-        json.dump(config_dict, f, indent=2)
-
-
 class Trainer:
     def __init__(
         self,
         train_dataset: Dataset,
         val_dataset: Dataset,
         test_dataset: Dataset,
-        config: ModelConfig,
+        train_config: TrainConfig,
+        model_config: ModelConfig,
     ):
-        self.config = config
+        self.model_config = model_config
+        self.train_config = train_config
+
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.test_dataset = test_dataset
@@ -90,37 +68,37 @@ class Trainer:
         self.current_margins = 0
 
         self.model = AEGISModel(
-            self.config.MODEL_NAME,
+            self.model_config.BACKBONE_REPO,
             self.num_classes,
-            self.config.S,
-            self.config.M0,
-        ).to(self.config.DEVICE)
+            self.model_config.S,
+            self.model_config.M0,
+        ).to(self.train_config.DEVICE)
 
         self.momentum_model = AEGISModel(
-            self.config.MODEL_NAME,
+            self.model_config.BACKBONE_REPO,
             self.num_classes,
-            self.config.S,
-            self.config.M0,
-        ).to(self.config.DEVICE)
+            self.model_config.S,
+            self.model_config.M0,
+        ).to(self.train_config.DEVICE)
         self.momentum_model.load_state_dict(self.model.state_dict())
         self.momentum_model.eval()
         for param in self.momentum_model.parameters():
             param.requires_grad = False
 
         self.log_lambda_ppc = torch.nn.Parameter(
-            torch.zeros(1, device=self.config.DEVICE)
+            torch.zeros(1, device=self.train_config.DEVICE)
         )
 
         # 优化器：为 gamma 使用更低学习率
         optimizer_params = [
             {"params": self.model.parameters()},
-            {"params": [self.log_lambda_ppc], "lr": self.config.LEARNING_RATE},
+            {"params": [self.log_lambda_ppc], "lr": self.model_config.LEARNING_RATE},
         ]
 
         self.optimizer = torch.optim.AdamW(
             optimizer_params,
-            lr=self.config.LEARNING_RATE,
-            weight_decay=self.config.WEIGHT_DECAY,
+            lr=self.model_config.LEARNING_RATE,
+            weight_decay=self.model_config.WEIGHT_DECAY,
         )
         self.scaler = GradScaler("cuda")
         self.global_step = 0
@@ -153,7 +131,7 @@ class Trainer:
         }
 
     def _compute_dynamic_margins(self, embeddings_or_buffer, labels):
-        margins = torch.zeros(self.num_classes, device=self.config.DEVICE)
+        margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
         kappas = []
         class_r = {}
 
@@ -176,13 +154,15 @@ class Trainer:
         else:
             kappas_norm = np.zeros_like(kappas)
 
-        gamma = self.config.GAMMA
+        gamma = self.model_config.GAMMA
 
         for c in range(self.num_classes):
-            omega_k = 1.0 / (1.0 + math.exp(kappas_norm[c] / self.config.TEMPERATURE))
+            omega_k = 1.0 / (
+                1.0 + math.exp(kappas_norm[c] / self.model_config.TEMPERATURE)
+            )
             n_c = self.class_counts.get(c, 1)
             omega_n = self.max_count / n_c
-            m_c = self.config.M0 * (gamma * omega_k + (1 - gamma) * omega_n)
+            m_c = self.model_config.M0 * (gamma * omega_k + (1 - gamma) * omega_n)
             margins[c] = m_c
 
         return margins
@@ -263,12 +243,12 @@ class Trainer:
 
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Evaluating val at epoch {epoch}"):
-                input_ids = batch["input_ids"].to(self.config.DEVICE)
-                attention_mask = batch["attention_mask"].to(self.config.DEVICE)
+                input_ids = batch["input_ids"].to(self.train_config.DEVICE)
+                attention_mask = batch["attention_mask"].to(self.train_config.DEVICE)
                 truth_class_keys = batch["class_key"]
                 truth_class_indices = torch.tensor(
                     [self.class_to_index[k] for k in truth_class_keys],
-                    device=self.config.DEVICE,
+                    device=self.train_config.DEVICE,
                 )
 
                 embs, logits = self.model(
@@ -319,24 +299,24 @@ class Trainer:
         VisualizationHelper.draw_plot_umap(
             val_embeddings_array,
             all_truth_class_keys,
-            self.config.UMAP_OUTPUT_DIR,
+            self.train_config.UMAP_OUTPUT_DIR,
             f"{epoch}.svg",
-            f"{self.config.SUBSET_NAME} - Val Epoch - {epoch}",
+            f"{self.model_config.SUBSET_NAME} - Val Epoch - {epoch}",
         )
-        VisualizationHelper.draw_prototype_heatmap(
+        VisualizationHelper.draw_prototype_similarity_matrix(
             self.train_geo_prototypes,
             self.index_to_class,
-            self.config.PROTOTYPE_HEATMAP_OUTPUT_DIR,
+            self.train_config.PROTOTYPE_SIMILARITY_OUTPUT_DIR,
             f"{epoch}.svg",
-            f"{self.config.SUBSET_NAME} - Val Epoch - {epoch}",
+            f"{self.model_config.SUBSET_NAME} - Val Epoch - {epoch}",
         )
-        VisualizationHelper.draw_geo_weight_prototype_similarity_matrix(
+        VisualizationHelper.draw_prototype_alignment_matrix(
             self.train_geo_prototypes,
             self.train_weight_prototypes,
             self.index_to_class,
-            self.config.PROTOTYPE_SIMILARITY_OUTPUT_DIR,
+            self.train_config.PROTOTYPE_ALIGNMENT_OUTPUT_DIR,
             f"{epoch}.svg",
-            f"{self.config.SUBSET_NAME} - Val Epoch - {epoch}",
+            f"{self.model_config.SUBSET_NAME} - Val Epoch - {epoch}",
         )
 
         return (
@@ -354,20 +334,20 @@ class Trainer:
     def train(self):
         train_loader = DataLoader(
             self.train_dataset,
-            batch_size=self.config.BATCH_SIZE,
+            batch_size=self.model_config.BATCH_SIZE,
             shuffle=False,
             collate_fn=custom_collate_fn,
         )
         val_loader = DataLoader(
             self.val_dataset,
-            batch_size=self.config.BATCH_SIZE,
+            batch_size=self.model_config.BATCH_SIZE,
             shuffle=False,
             collate_fn=custom_collate_fn,
         )
 
-        for epoch in range(self.start_epoch, self.config.MAX_EPOCHS):
+        for epoch in range(self.start_epoch, self.train_config.MAX_EPOCHES):
             log.print(
-                f"\nEpoch {epoch + 1}/{self.config.MAX_EPOCHS} - At {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                f"\nEpoch {epoch}/{self.train_config.MAX_EPOCHES} - At {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
             epoch_start_time = time.time()
             self.model.train()
@@ -380,8 +360,8 @@ class Trainer:
             with torch.no_grad():
                 for batch in tqdm(train_loader, desc="Updating momentum features"):
                     embs = self.momentum_model.encoder(
-                        batch["input_ids"].to(self.config.DEVICE),
-                        batch["attention_mask"].to(self.config.DEVICE),
+                        batch["input_ids"].to(self.train_config.DEVICE),
+                        batch["attention_mask"].to(self.train_config.DEVICE),
                     )
                     embs_norm = l2_norm(embs)
                     momentum_embeddings.append(embs_norm)
@@ -391,11 +371,13 @@ class Trainer:
                     momentum_truth_classes.extend(truth_class_indices)
             momentum_embeddings = torch.cat(momentum_embeddings, dim=0)
             momentum_truth_classes = torch.tensor(
-                momentum_truth_classes, device=self.config.DEVICE
+                momentum_truth_classes, device=self.train_config.DEVICE
             )
             if epoch == 0:
                 self.current_margins = torch.full(
-                    (self.num_classes,), self.config.M0, device=self.config.DEVICE
+                    (self.num_classes,),
+                    self.model_config.M0,
+                    device=self.train_config.DEVICE,
                 ).detach()
             else:
                 self.current_margins = self._compute_dynamic_margins(
@@ -414,12 +396,12 @@ class Trainer:
             progress_bar = tqdm(train_loader, desc="Training")
             batch_start_time = time.time()
             for batch in progress_bar:
-                input_ids = batch["input_ids"].to(self.config.DEVICE)
+                input_ids = batch["input_ids"].to(self.train_config.DEVICE)
                 batch_size = len(batch["input_ids"])
-                attention_mask = batch["attention_mask"].to(self.config.DEVICE)
+                attention_mask = batch["attention_mask"].to(self.train_config.DEVICE)
                 truth_class_indices = torch.tensor(
                     [self.class_to_index[k] for k in batch["class_key"]],
-                    device=self.config.DEVICE,
+                    device=self.train_config.DEVICE,
                 )
 
                 num_samples_in_epoch += batch_size
@@ -454,8 +436,8 @@ class Trainer:
                         self.model.parameters(), self.momentum_model.parameters()
                     ):
                         param_k.data = (
-                            self.config.MOMENTUM * param_k.data
-                            + (1 - self.config.MOMENTUM) * param_q.data
+                            self.model_config.MOMENTUM * param_k.data
+                            + (1 - self.model_config.MOMENTUM) * param_q.data
                         )
 
                 total_loss += loss.item()
@@ -493,7 +475,7 @@ class Trainer:
                 separation_score,
                 binary_metrics,
                 cwe_metrics,
-            ) = self._evaluate_epoch(val_loader, epoch + 1)
+            ) = self._evaluate_epoch(val_loader, epoch)
 
             weights = (
                 torch.softmax(self.model.encoder.layer_weights, dim=0)
@@ -550,7 +532,7 @@ class Trainer:
             log.print(f"Layer fusion weights: {dict(zip((8,9,10,11), weights))}")
 
             new_point = {
-                "epoch": epoch + 1,
+                "epoch": epoch,
                 "binary_f1": binary_metrics["f1"],
                 "macro_f1": cwe_metrics["macro"]["f1"],
             }
@@ -573,11 +555,11 @@ class Trainer:
                     geo_proto=self.train_geo_prototypes,
                     weight_proto=self.train_weight_prototypes,
                     class_to_idx=self.class_to_index,
-                    config=self.config,
+                    model_config=self.model_config,
                     idx_to_class=self.index_to_class,
-                    epoch=epoch + 1,
-                    output_dir=self.config.OUTPUT_DIR,
-                    max_checkpoints=self.config.MAX_CHECKPOINTS,
+                    epoch=epoch,
+                    output_dir=self.train_config.OUTPUT_DIR,
+                    max_checkpoints=self.train_config.MAX_CHECKPOINTS,
                 )
                 log.print(
                     f"✅ New Pareto solution! Binary F1: {binary_metrics['f1']}, Macro F1: {cwe_metrics['macro']['f1']}"
@@ -586,18 +568,24 @@ class Trainer:
             else:
                 self.pareto_patience_counter += 1
                 log.print(
-                    f"⚠️ Dominated solution. Pareto patience: {self.pareto_patience_counter}/{self.config.EARLY_STOPPING_PATIENCE}"
+                    f"⚠️ Dominated solution. Pareto patience: {self.pareto_patience_counter}/{self.train_config.EARLY_STOP_PATIENCE}"
                 )
             log.print(
                 f"⏱️ Epoch Training Time: {epoch_duration:.2f}s | "
                 f"Average Training Time in Epoch: {avg_sample_time_ms:.2f}ms"
             )
             log.print(
-                f"Epoch {epoch+1} Finished at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
+                f"Epoch {epoch} Finished at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
             )
 
-            if self.pareto_patience_counter >= self.config.EARLY_STOPPING_PATIENCE:
+            if epoch > self.train_config.MAX_EPOCHES:
                 log.print(
-                    f"🛑 Pareto early stopping triggered after {self.config.EARLY_STOPPING_PATIENCE} epochs without new non-dominated solution."
+                    f"🛑 Stopping triggered after reaching max epoches: {self.train_config.MAX_EPOCHES}."
+                )
+                break
+
+            if self.pareto_patience_counter >= self.train_config.EARLY_STOP_PATIENCE:
+                log.print(
+                    f"🛑 Pareto early stopping triggered after {self.train_config.EARLY_STOP_PATIENCE} epochs without new non-dominated solution."
                 )
                 break
