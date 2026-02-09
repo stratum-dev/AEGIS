@@ -49,7 +49,7 @@ class Evaluator:
             model_config.BACKBONE_REPO,
             num_classes,
             model_config.M0,
-            model_config.S,
+            model_config.S0,
         ).to(self.eval_config.DEVICE)
         self.model.load_state_dict(full_checkpoint["model_state_dict"], strict=True)
         self.model.eval()

@@ -17,7 +17,7 @@ class ModelConfig:
         gamma: float,
         temperature: float,
         m0: float,
-        s: float,
+        s0: float,
         momentum: float,
     ):
         # 数据集
@@ -36,7 +36,7 @@ class ModelConfig:
         self.GAMMA = gamma
         self.TEMPERATURE = temperature
         self.M0 = m0
-        self.S = s
+        self.S0 = s0
         self.MOMENTUM = momentum
 
 

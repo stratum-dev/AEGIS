@@ -67,17 +67,17 @@ class Trainer:
         self.pareto_patience_counter = 0
         self.current_margins = 0
 
-        self.model = AEGISModel(
+        self.model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
             self.num_classes,
-            self.model_config.S,
+            self.model_config.S0,
             self.model_config.M0,
         ).to(self.train_config.DEVICE)
 
-        self.momentum_model = AEGISModel(
+        self.momentum_model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
             self.num_classes,
-            self.model_config.S,
+            self.model_config.S0,
             self.model_config.M0,
         ).to(self.train_config.DEVICE)
         self.momentum_model.load_state_dict(self.model.state_dict())
@@ -130,29 +130,30 @@ class Trainer:
             if k in self.class_to_index
         }
 
-    def _compute_dynamic_margins(self, embeddings_or_buffer, labels):
+    def _compute_adaptive_params(self, embeddings, labels):
         margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
         kappas = []
-        class_r = {}
 
         for c in range(self.num_classes):
             mask = labels == c
             if mask.sum() == 0:
                 kappas.append(1e-6)
-                class_r[c] = 0.0
                 continue
-            class_embs = embeddings_or_buffer[mask]
+            class_embs = embeddings[mask]
             kappa = estimate_vmf_concentration(class_embs)
             kappas.append(kappa)
-            class_r[c] = torch.norm(torch.mean(class_embs, dim=0)).item()
 
-        kappas = np.array(kappas)
-        if len(kappas) > 1:
-            mu_k = np.mean(kappas)
-            sigma_k = np.std(kappas) + 1e-8
-            kappas_norm = (kappas - mu_k) / sigma_k
-        else:
-            kappas_norm = np.zeros_like(kappas)
+        kappas = torch.tensor(kappas, device=self.train_config.DEVICE)
+
+        # ===== class-wise adaptive scale =====
+        # normalize so mean(s)=S
+        scales = self.model_config.S0 * kappas / kappas.mean().clamp(min=1e-6)
+
+        # ===== margin logic (保持你原有的) =====
+        kappas_np = kappas.detach().cpu().numpy()
+        mu_k = np.mean(kappas_np)
+        sigma_k = np.std(kappas_np) + 1e-8
+        kappas_norm = (kappas_np - mu_k) / sigma_k
 
         gamma = self.model_config.GAMMA
 
@@ -165,7 +166,7 @@ class Trainer:
             m_c = self.model_config.M0 * (gamma * omega_k + (1 - gamma) * omega_n)
             margins[c] = m_c
 
-        return margins
+        return margins, scales.detach()
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -255,6 +256,7 @@ class Trainer:
                     input_ids,
                     attention_mask,
                     truth_class_indices,
+                    scales=self.current_scales,
                     margins=self.current_margins,
                 )
                 all_val_embeddings.append(embs.cpu().numpy())
@@ -379,10 +381,17 @@ class Trainer:
                     self.model_config.M0,
                     device=self.train_config.DEVICE,
                 ).detach()
+                self.current_scales = torch.full(
+                    (self.num_classes,),
+                    self.model_config.S0,
+                    device=self.train_config.DEVICE,
+                )
             else:
-                self.current_margins = self._compute_dynamic_margins(
-                    momentum_embeddings, momentum_truth_classes
-                ).detach()
+                self.current_margins, self.current_scales = (
+                    self._compute_adaptive_params(
+                        momentum_embeddings, momentum_truth_classes
+                    )
+                )
 
             global_avg_prototypes = self._compute_average_prototypes(
                 momentum_embeddings, momentum_truth_classes
@@ -411,6 +420,7 @@ class Trainer:
                         input_ids,
                         attention_mask,
                         truth_class_indices,
+                        self.current_scales,
                         self.current_margins,
                     )
                     loss_kappa = kappa_loss(logits, truth_class_indices)
@@ -483,6 +493,8 @@ class Trainer:
                 .cpu()
                 .numpy()
             )
+
+            log.print(self.current_scales)
 
             log.print(
                 f"ppc/loss: {loss_ppc.item()}",

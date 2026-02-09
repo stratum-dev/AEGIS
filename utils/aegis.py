@@ -44,16 +44,16 @@ class RoBERTaEncoder(nn.Module):
 
 
 class KappaLossClassifierHead(nn.Module):
-    def __init__(self, in_features, num_classes, s, m0):
+    def __init__(self, in_features, num_classes, scales, m0):
         super().__init__()
         self.in_features = in_features
         self.num_classes = num_classes
-        self.s = s
+        self.scales = scales
         self.m0 = m0
         self.weight = nn.Parameter(torch.Tensor(num_classes, in_features))
         nn.init.xavier_uniform_(self.weight)
 
-    def forward(self, x, labels, margins):
+    def forward(self, x, labels, scales, margins):
         # Normalize weight
         weight_norm = l2_norm(self.weight)
         # Cosine similarity matrix: (B, C)
@@ -67,7 +67,7 @@ class KappaLossClassifierHead(nn.Module):
         cos_theta_m = cos_theta - one_hot * margins_expanded
 
         # Scale
-        logits = self.s * cos_theta_m
+        logits = scales * cos_theta_m
         return logits
 
 
@@ -86,11 +86,13 @@ class AEGISModel(nn.Module):
             self.encoder.feature_dim, num_classes, s, m0
         )
 
-    def forward(self, input_ids, attention_mask, labels=None, margins=None):
+    def forward(
+        self, input_ids, attention_mask, labels=None, scales=None, margins=None
+    ):
         features = self.encoder(input_ids, attention_mask)
         features_norm = l2_norm(features)
         if labels is not None and margins is not None:
-            logits = self.kappaface_head(features_norm, labels, margins)
+            logits = self.kappaface_head(features_norm, labels, scales, margins)
             return features_norm, logits
         else:
             return features_norm

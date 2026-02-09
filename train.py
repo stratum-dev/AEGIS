@@ -12,7 +12,7 @@ from utils.logger import log
 DATASET_REPO = "codemetic/AEGIS"
 # Subset for above repo.
 # Avaliable at: "bigvul", "mvd", "megavul", "draper", "vuldeepecker", "reposvul"
-SUBSET_NAME = "reposvul"
+SUBSET_NAME = "bigvul"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
@@ -24,7 +24,7 @@ BACKBONE_REPO = "Salesforce/codet5-base"
 # Please refer the original paper to adjust the hyperparameters
 GAMMA = 0.7
 M0 = 0.8
-S = 15
+S0 = 30
 MOMENTUM = 0.999
 TEMPERATURE = 0.2
 BATCH_SIZE = 40
@@ -38,12 +38,12 @@ MAX_LENGTHS = 512
 # ============================ Training Settings=================================
 # Fill your device here. "cuda","cuda:0","cuda:1","cuda:2", etc.
 # Mixed-precision relies on CUDA, and therefore training on CPU is NOT supported.
-DEVICE = "cuda:0"
+DEVICE = "cuda:2"
 MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
 MAX_CHECKPOINTS = 1
 OUTPUT_DIR = os.path.join(
-    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}"
+    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}_"
 )
 
 
@@ -62,7 +62,7 @@ def main():
         gamma=GAMMA,
         temperature=TEMPERATURE,
         m0=M0,
-        s=S,
+        s0=S0,
         momentum=MOMENTUM,
     )
 
