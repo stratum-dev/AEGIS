@@ -1,10 +1,8 @@
-import argparse
 import warnings
-import torch
 from utils.config import EvalConfig
 from utils.evaluator import Evaluator
-from utils.seed import set_seed
 from utils.file import list_all_subdirs
+from utils.checkpoint import list_checkpoints
 import os
 from InquirerPy import inquirer
 
@@ -14,8 +12,8 @@ MODEL_DIR = inquirer.select(
     message="Select the model directory: ",
     choices=list_all_subdirs(os.path.join(".", "models")),
 ).execute()
-CHECKPOINT = inquirer.number(
-    message="Specify the epoch of checkpoint: ", float_allowed=False
+CHECKPOINT = inquirer.select(
+    message="Specify the epoch of checkpoint: ", choices=list_checkpoints(MODEL_DIR)
 ).execute()
 BATCH_SIZE = inquirer.number(
     message="Batch size for evaluation: ", min_allowed=1, float_allowed=False

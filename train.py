@@ -12,19 +12,19 @@ from utils.logger import log
 DATASET_REPO = "codemetic/AEGIS"
 # Subset for above repo.
 # Avaliable at: "bigvul", "mvd", "megavul", "draper", "vuldeepecker", "reposvul"
-SUBSET_NAME = "primevul-paired"
+SUBSET_NAME = "reposvul"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
 # "Salesforce/codet5-base", "Salesforce/codet5p-220m", "Salesforce/codet5p-770m"
-BACKBONE_REPO = "Salesforce/codet5p-220m"
+BACKBONE_REPO = "Salesforce/codet5-base"
 
 # ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
 # Please refer the original paper to adjust the hyperparameters
 GAMMA = 0.7
 M0 = 0.8
-S = 30
+S = 15
 MOMENTUM = 0.999
 TEMPERATURE = 0.2
 BATCH_SIZE = 40
@@ -39,8 +39,8 @@ MAX_LENGTHS = 512
 # Fill your device here. "cuda","cuda:0","cuda:1","cuda:2", etc.
 # Mixed-precision relies on CUDA, and therefore training on CPU is NOT supported.
 DEVICE = "cuda:0"
-MAX_EPOCHES = 2
-EARLY_STOP_PATIENCE = 30
+MAX_EPOCHES = 100
+EARLY_STOP_PATIENCE = 20
 MAX_CHECKPOINTS = 1
 OUTPUT_DIR = os.path.join(
     "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}"
@@ -91,7 +91,7 @@ def main():
 
     trainer = Trainer(
         train_dataset=train_dataset,
-        val_dataset=val_dataset,
+        val_dataset=test_dataset,
         test_dataset=test_dataset,
         train_config=train_config,
         model_config=model_config,

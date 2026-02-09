@@ -1,8 +1,22 @@
 import glob
 import os
 import torch
-from utils.aegis import AEGISModel
-from utils.config import ModelConfig, EvalConfig
+from utils.config import ModelConfig
+
+
+def list_checkpoints(model_dir):
+    checkpoints = glob.glob(os.path.join(model_dir, "pareto_checkpoint_epoch_*.pth"))
+
+    return list(
+        map(
+            lambda checkpoint: int(
+                os.path.basename(checkpoint)
+                .replace("pareto_checkpoint_epoch_", "")
+                .replace(".pth", "")
+            ),
+            checkpoints,
+        )
+    )
 
 
 def save_checkpoint_with_limit(

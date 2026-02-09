@@ -62,12 +62,10 @@ class Evaluator:
         )
 
     def prepare_data(self):
-        test_data = load_dataset(self.model_config.DATASET_REPO, self.model_config.SUBSET_NAME)[
-            self.eval_config.EVAL_SPLIT
-        ]
-        test_dataset = VulnerabilityDataset(
-            test_data, self.model_config
-        )
+        test_data = load_dataset(
+            self.model_config.DATASET_REPO, self.model_config.SUBSET_NAME
+        )[self.eval_config.EVAL_SPLIT]
+        test_dataset = VulnerabilityDataset(test_data, self.model_config)
         self.test_loader = DataLoader(
             test_dataset,
             batch_size=self.eval_config.BATCH_SIZE,
@@ -75,7 +73,9 @@ class Evaluator:
             collate_fn=custom_collate_fn,
         )
         self.testset_size = len(test_data)
-        print(f"Loaded {self.eval_config.EVAL_SPLIT} set with {self.testset_size} samples.")
+        print(
+            f"Loaded {self.eval_config.EVAL_SPLIT} set with {self.testset_size} samples."
+        )
 
     def run_evaluation(
         self,
