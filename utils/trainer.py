@@ -146,21 +146,30 @@ class Trainer:
         kappas = torch.tensor(kappas, device=self.train_config.DEVICE)
 
         # ===== class-wise adaptive scale =====
-        # normalize so mean(s)=S
         scales = self.model_config.S0 * kappas / kappas.mean().clamp(min=1e-6)
 
-        # ===== margin logic (保持你原有的) =====
+        # ===== 自适应温度 T_c: kappa越小，T_c越大 =====
+        kappa_min = kappas.min()
+        kappa_max = kappas.max()
+        kappa_range = (kappa_max - kappa_min).clamp(min=1e-6)
+        kappa_norm = (kappas - kappa_min) / kappa_range
+        T_c = (0.5 * (1.0 - kappa_norm)).clamp(min=1e-8)
+
+        # ===== margin logic (数值稳定版) =====
+        # 转为 CPU numpy 用于计算 z-score（保持与原逻辑一致）
         kappas_np = kappas.detach().cpu().numpy()
         mu_k = np.mean(kappas_np)
         sigma_k = np.std(kappas_np) + 1e-8
-        kappas_norm = (kappas_np - mu_k) / sigma_k
+        kappas_norm = torch.from_numpy((kappas_np - mu_k) / sigma_k).to(
+            self.train_config.DEVICE
+        )
+
+        # 计算 omega_k = sigmoid( - (kappas_norm / T_c) )
+        omega_k = torch.sigmoid(-(kappas_norm / T_c))  # shape: [num_classes]
 
         gamma = self.model_config.GAMMA
-
         for c in range(self.num_classes):
-            omega_k = 1.0 / (
-                1.0 + math.exp(kappas_norm[c] / self.model_config.TEMPERATURE)
-            )
+            omega_k = omega_k[c].item()  # 安全取值，无溢出风险
             n_c = self.class_counts.get(c, 1)
             omega_n = self.max_count / n_c
             m_c = self.model_config.M0 * (gamma * omega_k + (1 - gamma) * omega_n)

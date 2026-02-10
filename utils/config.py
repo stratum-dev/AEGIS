@@ -15,7 +15,6 @@ class ModelConfig:
         weight_decay: float,
         random_seed: int,
         gamma: float,
-        temperature: float,
         m0: float,
         s0: float,
         momentum: float,
@@ -34,7 +33,6 @@ class ModelConfig:
 
         # Loss
         self.GAMMA = gamma
-        self.TEMPERATURE = temperature
         self.M0 = m0
         self.S0 = s0
         self.MOMENTUM = momentum
