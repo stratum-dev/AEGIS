@@ -22,7 +22,6 @@ BACKBONE_REPO = "Salesforce/codet5-base"
 # ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
 # Please refer the original paper to adjust the hyperparameters
-GAMMA = 0.7
 M0 = 0.8
 S0 = 30
 MOMENTUM = 0.999
@@ -59,7 +58,6 @@ def main():
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
         random_seed=RANDOM_SEED,
-        gamma=GAMMA,
         m0=M0,
         s0=S0,
         momentum=MOMENTUM,

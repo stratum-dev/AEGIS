@@ -1,5 +1,4 @@
 from datetime import datetime
-import math
 import time
 import warnings
 from collections import Counter
@@ -134,6 +133,7 @@ class Trainer:
         margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
         kappas = []
 
+        # ===== estimate class-wise vMF concentration =====
         for c in range(self.num_classes):
             mask = labels == c
             if mask.sum() == 0:
@@ -148,15 +148,13 @@ class Trainer:
         # ===== class-wise adaptive scale =====
         scales = self.model_config.S0 * kappas / kappas.mean().clamp(min=1e-6)
 
-        # ===== 自适应温度 T_c: kappa越小，T_c越大 =====
+        # ===== difficulty-aware weight omega_k =====
         kappa_min = kappas.min()
         kappa_max = kappas.max()
         kappa_range = (kappa_max - kappa_min).clamp(min=1e-6)
         kappa_norm = (kappas - kappa_min) / kappa_range
         T_c = (0.5 * (1.0 - kappa_norm)).clamp(min=1e-8)
 
-        # ===== margin logic (数值稳定版) =====
-        # 转为 CPU numpy 用于计算 z-score（保持与原逻辑一致）
         kappas_np = kappas.detach().cpu().numpy()
         mu_k = np.mean(kappas_np)
         sigma_k = np.std(kappas_np) + 1e-8
@@ -164,15 +162,37 @@ class Trainer:
             self.train_config.DEVICE
         )
 
-        # 计算 omega_k = sigmoid( - (kappas_norm / T_c) )
-        omega_k = torch.sigmoid(-(kappas_norm / T_c))  # shape: [num_classes]
+        omega_k = torch.sigmoid(-(kappas_norm / T_c))  # [C]
 
-        gamma = self.model_config.GAMMA
+        # ===== frequency-aware weight omega_n =====
+        omega_n_list = []
         for c in range(self.num_classes):
-            omega_k = omega_k[c].item()  # 安全取值，无溢出风险
             n_c = self.class_counts.get(c, 1)
-            omega_n = self.max_count / n_c
-            m_c = self.model_config.M0 * (gamma * omega_k + (1 - gamma) * omega_n)
+            omega_n_list.append(self.max_count / n_c)
+
+        omega_n_vec = torch.tensor(omega_n_list, device=self.train_config.DEVICE)
+
+        # log stabilization (avoid extreme domination by rare classes)
+        omega_n_vec = torch.log(omega_n_vec + 1.0)
+
+        # ===== Total Variation based adaptive gamma =====
+        def to_prob(x):
+            return x / (x.sum() + 1e-8)
+
+        p_k = to_prob(omega_k)
+        p_n = to_prob(omega_n_vec)
+
+        # Total Variation Distance in [0,1]
+        gamma = 0.5 * torch.sum(torch.abs(p_k - p_n))
+        gamma = gamma.clamp(0.0, 1.0).item()
+
+        # ===== final margin =====
+        for c in range(self.num_classes):
+            omega_k_val = omega_k[c].item()
+            omega_n_val = omega_n_vec[c].item()
+            m_c = self.model_config.M0 * (
+                gamma * omega_k_val + (1.0 - gamma) * omega_n_val
+            )
             margins[c] = m_c
 
         return margins, scales.detach()
