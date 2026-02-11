@@ -64,7 +64,17 @@ class Trainer:
         self.all_points = []
         self.pareto_front = []
         self.pareto_patience_counter = 0
-        self.current_margins = 0
+
+        self.current_margins = torch.full(
+            (self.num_classes,),
+            self.model_config.M0,
+            device=self.train_config.DEVICE,
+        ).detach()
+        self.current_scales = torch.full(
+            (self.num_classes,),
+            self.model_config.S0,
+            device=self.train_config.DEVICE,
+        )
 
         self.model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
@@ -88,7 +98,6 @@ class Trainer:
             torch.zeros(1, device=self.train_config.DEVICE)
         )
 
-        # 优化器：为 gamma 使用更低学习率
         optimizer_params = [
             {"params": self.model.parameters()},
             {"params": [self.log_lambda_ppc], "lr": self.model_config.LEARNING_RATE},
@@ -175,7 +184,7 @@ class Trainer:
         # log stabilization (avoid extreme domination by rare classes)
         omega_n_vec = torch.log(omega_n_vec + 1.0)
 
-        # ===== Total Variation based adaptive gamma =====
+        # ===== Information Gain Gating: Total Variation based adaptive gamma =====
         def to_prob(x):
             return x / (x.sum() + 1e-8)
 
@@ -185,6 +194,8 @@ class Trainer:
         # Total Variation Distance in [0,1]
         gamma = 0.5 * torch.sum(torch.abs(p_k - p_n))
         gamma = gamma.clamp(0.0, 1.0).item()
+
+        print(gamma)
 
         # ===== final margin =====
         for c in range(self.num_classes):
@@ -404,23 +415,9 @@ class Trainer:
             momentum_truth_classes = torch.tensor(
                 momentum_truth_classes, device=self.train_config.DEVICE
             )
-            if epoch == 0:
-                self.current_margins = torch.full(
-                    (self.num_classes,),
-                    self.model_config.M0,
-                    device=self.train_config.DEVICE,
-                ).detach()
-                self.current_scales = torch.full(
-                    (self.num_classes,),
-                    self.model_config.S0,
-                    device=self.train_config.DEVICE,
-                )
-            else:
-                self.current_margins, self.current_scales = (
-                    self._compute_adaptive_params(
-                        momentum_embeddings, momentum_truth_classes
-                    )
-                )
+            self.current_margins, self.current_scales = self._compute_adaptive_params(
+                momentum_embeddings, momentum_truth_classes
+            )
 
             global_avg_prototypes = self._compute_average_prototypes(
                 momentum_embeddings, momentum_truth_classes
