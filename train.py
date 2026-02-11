@@ -12,12 +12,12 @@ from utils.logger import log
 DATASET_REPO = "codemetic/AEGIS"
 # Subset for above repo.
 # Avaliable at: "bigvul", "mvd", "megavul", "draper", "vuldeepecker", "reposvul"
-SUBSET_NAME = "megavul"
+SUBSET_NAME = "bigvul"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
 # "Salesforce/codet5-base", "Salesforce/codet5p-220m", "Salesforce/codet5p-770m"
-BACKBONE_REPO = "microsoft/unixcoder-base"
+BACKBONE_REPO = "Salesforce/codet5-base"
 
 # ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
@@ -30,14 +30,11 @@ BATCH_SIZE = 50
 LEARNING_RATE = 2e-5
 WEIGHT_DECAY = 1e-2
 RANDOM_SEED = 42
-# The max length for processed code sample, depends on your backbone. 512 is default.
-# Normally you DON'T need to modify this parameter.
-MAX_LENGTHS = 512
 
 # ============================ Training Settings=================================
 # Fill your device here. "cuda","cuda:0","cuda:1","cuda:2", etc.
 # Mixed-precision relies on CUDA, and therefore training on CPU is NOT supported.
-DEVICE = "cuda:0"
+DEVICE = "cuda:1"
 MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
 MAX_CHECKPOINTS = 1
@@ -53,7 +50,6 @@ def main():
         subset_name=SUBSET_NAME,
         dataset_repo=DATASET_REPO,
         backbone_repo=BACKBONE_REPO,
-        max_length=MAX_LENGTHS,
         batch_size=BATCH_SIZE,
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,

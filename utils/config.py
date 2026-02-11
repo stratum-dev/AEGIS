@@ -9,7 +9,6 @@ class ModelConfig:
         subset_name: str,
         dataset_repo: str,
         backbone_repo: str,
-        max_length: int,
         batch_size: int,
         learning_rate: float,
         weight_decay: float,
@@ -23,8 +22,6 @@ class ModelConfig:
         self.DATASET_REPO = dataset_repo
         self.BACKBONE_REPO = backbone_repo
 
-        # 超参数
-        self.MAX_LENGTH = max_length
         self.BATCH_SIZE = batch_size
         self.LEARNING_RATE = learning_rate
         self.WEIGHT_DECAY = weight_decay

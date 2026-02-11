@@ -8,7 +8,7 @@ class VulnerabilityDataset(torch.utils.data.Dataset):
     def __init__(self, data, config: ModelConfig):
         self.data = data
         self.tokenizer = AutoTokenizer.from_pretrained(config.BACKBONE_REPO)
-        self.max_length = config.MAX_LENGTH
+        self.max_length = self.tokenizer.model_max_length
 
     def __len__(self) -> int:
         return len(self.data)
