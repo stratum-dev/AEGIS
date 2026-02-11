@@ -17,7 +17,7 @@ SUBSET_NAME = "megavul"
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
 # "Salesforce/codet5-base", "Salesforce/codet5p-220m", "Salesforce/codet5p-770m"
-BACKBONE_REPO = "Salesforce/codet5-base"
+BACKBONE_REPO = "microsoft/unixcoder-base"
 
 # ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
@@ -26,7 +26,7 @@ M0 = 0.8
 S0 = 30
 MOMENTUM = 0.999
 
-BATCH_SIZE = 40
+BATCH_SIZE = 50
 LEARNING_RATE = 2e-5
 WEIGHT_DECAY = 1e-2
 RANDOM_SEED = 42

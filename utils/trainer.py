@@ -165,7 +165,7 @@ class Trainer:
             self.train_config.DEVICE
         )
 
-        omega_k = 1 - torch.sigmoid(0.5 * kappas_norm)  # [C]
+        omega_k = torch.sigmoid(0.5 * kappas_norm)  # [C]
 
         # ===== frequency-aware weight omega_n =====
         omega_f_list = []
@@ -196,7 +196,7 @@ class Trainer:
         jsd = 0.5 * (kl_pm + kl_qm)  # JSD ∈ [0, ln(2)] ≈ [0, 0.693]
 
         # Normalize JSD to [0, 1] for use as gamma (optional but safe)
-        gamma = 1.0 - (jsd / np.log(2)).clamp(0.0, 1.0).item()
+        gamma = (jsd / np.log(2)).clamp(0.0, 1.0).item()
 
         # Optional: print for debugging
         log.print(f"JSD-based gamma: {gamma:.4f}")
