@@ -112,7 +112,7 @@ class Trainer:
         self.global_step = 0
 
         self.class_counts = self._count_classes(train_dataset)
-        self.max_count = max(self.class_counts.values())
+        self.max_class_count = max(self.class_counts.values())
         self.start_epoch = 0
         self.train_avg_prototypes = None
         self.train_geo_prototypes = None
@@ -158,12 +158,6 @@ class Trainer:
         scales = self.model_config.S0 * kappas / kappas.mean().clamp(min=1e-6)
 
         # ===== difficulty-aware weight omega_k =====
-        kappa_min = kappas.min()
-        kappa_max = kappas.max()
-        kappa_range = (kappa_max - kappa_min).clamp(min=1e-6)
-        kappa_norm = (kappas - kappa_min) / kappa_range
-        T_c = (0.5 * (1.0 - kappa_norm)).clamp(min=1e-8)
-
         kappas_np = kappas.detach().cpu().numpy()
         mu_k = np.mean(kappas_np)
         sigma_k = np.std(kappas_np) + 1e-8
@@ -171,39 +165,48 @@ class Trainer:
             self.train_config.DEVICE
         )
 
-        omega_k = torch.sigmoid(-(kappas_norm / T_c))  # [C]
+        omega_k = 1 - torch.sigmoid(0.5 * kappas_norm)  # [C]
 
         # ===== frequency-aware weight omega_n =====
-        omega_n_list = []
+        omega_f_list = []
         for c in range(self.num_classes):
             n_c = self.class_counts.get(c, 1)
-            omega_n_list.append(self.max_count / n_c)
+            k = self.max_class_count  # max |D_y|
+            w = (torch.cos(torch.pi * torch.tensor(n_c) / k) + 1) / 2
+            omega_f_list.append(w.item())
 
-        omega_n_vec = torch.tensor(omega_n_list, device=self.train_config.DEVICE)
+        omega_f_vec = torch.tensor(omega_f_list, device=self.train_config.DEVICE)
 
-        # log stabilization (avoid extreme domination by rare classes)
-        omega_n_vec = torch.log(omega_n_vec + 1.0)
-
-        # ===== Information Gain Gating: Total Variation based adaptive gamma =====
+        # ===== Convert to probability distributions (sum to 1) =====
         def to_prob(x):
             return x / (x.sum() + 1e-8)
 
         p_k = to_prob(omega_k)
-        p_n = to_prob(omega_n_vec)
+        p_n = to_prob(omega_f_vec)
 
-        # Total Variation Distance in [0,1]
-        gamma = 0.5 * torch.sum(torch.abs(p_k - p_n))
-        gamma = gamma.clamp(0.0, 1.0).item()
+        # ===== Adaptive gamma via Jensen-Shannon Divergence (JSD) =====
+        # Compute midpoint distribution M = 0.5 * (P + Q)
+        m = 0.5 * (p_k + p_n)
 
-        print(gamma)
+        # Compute KL(P || M) and KL(Q || M) with numerical stability
+        eps = 1e-8
+        kl_pm = torch.sum(p_k * torch.log((p_k + eps) / (m + eps)))
+        kl_qm = torch.sum(p_n * torch.log((p_n + eps) / (m + eps)))
+
+        jsd = 0.5 * (kl_pm + kl_qm)  # JSD ∈ [0, ln(2)] ≈ [0, 0.693]
+
+        # Normalize JSD to [0, 1] for use as gamma (optional but safe)
+        gamma = 1.0 - (jsd / np.log(2)).clamp(0.0, 1.0).item()
+
+        # Optional: print for debugging
+        log.print(f"JSD-based gamma: {gamma:.4f}")
 
         # ===== final margin =====
         for c in range(self.num_classes):
             omega_k_val = omega_k[c].item()
-            omega_n_val = omega_n_vec[c].item()
-            m_c = self.model_config.M0 * (
-                gamma * omega_k_val + (1.0 - gamma) * omega_n_val
-            )
+            omega_n_val = omega_f_vec[c].item()
+            psi = gamma * omega_k_val + (1.0 - gamma) * omega_n_val
+            m_c = self.model_config.M0 * (psi)
             margins[c] = m_c
 
         return margins, scales.detach()
