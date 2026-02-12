@@ -75,6 +75,8 @@ class Trainer:
             self.model_config.S0,
             device=self.train_config.DEVICE,
         )
+        self.current_gamma = 0
+        self.current_psis = None
 
         self.model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
@@ -205,11 +207,11 @@ class Trainer:
         for c in range(self.num_classes):
             omega_k_val = omega_k[c].item()
             omega_n_val = omega_f_vec[c].item()
-            psi = gamma * omega_k_val + (1.0 - gamma) * omega_n_val
-            m_c = self.model_config.M0 * (psi)
+            psis = gamma * omega_k_val + (1.0 - gamma) * omega_n_val
+            m_c = self.model_config.M0 * (psis)
             margins[c] = m_c
 
-        return margins, scales.detach()
+        return margins, scales.detach(), gamma, psis
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -418,7 +420,12 @@ class Trainer:
             momentum_truth_classes = torch.tensor(
                 momentum_truth_classes, device=self.train_config.DEVICE
             )
-            self.current_margins, self.current_scales = self._compute_adaptive_params(
+            (
+                self.current_margins,
+                self.current_scales,
+                self.current_gamma,
+                self.current_psis,
+            ) = self._compute_adaptive_params(
                 momentum_embeddings, momentum_truth_classes
             )
 
@@ -524,6 +531,9 @@ class Trainer:
             )
 
             log.print("Scales: ", self.current_scales)
+            log.print("Margins: ", self.current_scales)
+            log.print("Gamma: ", self.current_gamma)
+            log.print("Psis: ", self.current_psis)
 
             log.print(
                 f"PPC Loss: {loss_ppc.item()}",

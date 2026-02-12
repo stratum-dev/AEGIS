@@ -8,3 +8,4 @@ archive_*
 archive
 __pycache__
 temp
+result
