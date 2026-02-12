@@ -199,7 +199,7 @@ class Trainer:
         gamma = (jsd / np.log(2)).clamp(0.0, 1.0).item()
 
         # Optional: print for debugging
-        log.print(f"JSD-based gamma: {gamma:.4f}")
+        log.print(f"Current JSD-based gamma: {gamma:.4f}")
 
         # ===== final margin =====
         for c in range(self.num_classes):
@@ -523,16 +523,15 @@ class Trainer:
                 .numpy()
             )
 
-            log.print(self.current_scales)
+            log.print("Scales: ", self.current_scales)
 
             log.print(
-                f"ppc/loss: {loss_ppc.item()}",
-                f"ppc/lambda: {lambda_ppc.item()}",
-                f"ppc/log_lambda: {self.log_lambda_ppc.item()}",
+                f"PPC Loss: {loss_ppc.item()}",
+                f"PPC Lambda: {lambda_ppc.item()}",
             )
 
             log.print(
-                f"Train: Combined Loss: {avg_train_combined_loss:.4f} | "
+                f"Combined Loss: {avg_train_combined_loss:.4f} | "
                 f"Kappa Loss: {avg_train_kappa_loss:.4f}"
             )
 
