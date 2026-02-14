@@ -13,7 +13,6 @@ class ModelConfig:
         learning_rate: float,
         weight_decay: float,
         random_seed: int,
-        m0: float,
         s0: float,
         momentum: float,
     ):
@@ -27,7 +26,6 @@ class ModelConfig:
         self.WEIGHT_DECAY = weight_decay
         self.RANDOM_SEED = random_seed
 
-        self.M0 = m0
         self.S0 = s0
         self.MOMENTUM = momentum
 

@@ -22,7 +22,6 @@ BACKBONE_REPO = "Salesforce/codet5-base"
 # ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
 # Please refer the original paper to adjust the hyperparameters
-M0 = 0.8
 S0 = 30
 MOMENTUM = 0.999
 
@@ -39,7 +38,7 @@ MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
 MAX_CHECKPOINTS = 1
 OUTPUT_DIR = os.path.join(
-    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}_ag_ac"
+    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}_ag_rv"
 )
 
 
@@ -54,7 +53,6 @@ def main():
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
         random_seed=RANDOM_SEED,
-        m0=M0,
         s0=S0,
         momentum=MOMENTUM,
     )

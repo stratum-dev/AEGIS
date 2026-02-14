@@ -60,6 +60,7 @@ class Trainer:
         self.class_to_index = {cls: idx for idx, cls in enumerate(class_list)}
         self.index_to_class = {idx: cls for cls, idx in self.class_to_index.items()}
         self.num_classes = len(self.class_to_index)
+        self.maximum_margin = self.num_classes / (self.num_classes - 1)
 
         self.all_points = []
         self.pareto_front = []
@@ -67,7 +68,7 @@ class Trainer:
 
         self.current_margins = torch.full(
             (self.num_classes,),
-            self.model_config.M0,
+            self.maximum_margin,
             device=self.train_config.DEVICE,
         ).detach()
         self.current_scales = torch.full(
@@ -82,14 +83,14 @@ class Trainer:
             self.model_config.BACKBONE_REPO,
             self.num_classes,
             self.model_config.S0,
-            self.model_config.M0,
+            self.maximum_margin,
         ).to(self.train_config.DEVICE)
 
         self.momentum_model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
             self.num_classes,
             self.model_config.S0,
-            self.model_config.M0,
+            self.maximum_margin,
         ).to(self.train_config.DEVICE)
         self.momentum_model.load_state_dict(self.model.state_dict())
         self.momentum_model.eval()
@@ -143,6 +144,7 @@ class Trainer:
     def _compute_adaptive_params(self, embeddings, labels):
         margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
         kappas = []
+        psis = []
 
         # ===== estimate class-wise vMF concentration =====
         for c in range(self.num_classes):
@@ -157,7 +159,21 @@ class Trainer:
         kappas = torch.tensor(kappas, device=self.train_config.DEVICE)
 
         # ===== class-wise adaptive scale =====
-        scales = self.model_config.S0 * kappas / kappas.mean().clamp(min=1e-6)
+        kappa_med = kappas.median()
+        mad = (kappas - kappa_med).abs().median().clamp(min=1e-6)
+        
+        z = (kappas - kappa_med) / mad
+        
+        # smooth monotonic positive mapping
+        scales = self.model_config.S0 * (1.0 + torch.tanh(z))
+        
+        # optional safety clamp
+        scales = scales.clamp(
+            min=0.1 * self.model_config.S0,
+            max=2.0 * self.model_config.S0
+        )
+
+        # scales = torch.full_like(kappas, self.model_config.S0)
 
         # ===== difficulty-aware weight omega_k =====
         kappas_np = kappas.detach().cpu().numpy()
@@ -200,15 +216,13 @@ class Trainer:
         # Normalize JSD to [0, 1] for use as gamma (optional but safe)
         gamma = (jsd / np.log(2)).clamp(0.0, 1.0).item()
 
-        # Optional: print for debugging
-        log.print(f"Current JSD-based gamma: {gamma:.4f}")
-
         # ===== final margin =====
         for c in range(self.num_classes):
             omega_k_val = omega_k[c].item()
             omega_n_val = omega_f_vec[c].item()
-            psis = gamma * omega_k_val + (1.0 - gamma) * omega_n_val
-            m_c = self.model_config.M0 * (psis)
+            psi = gamma * omega_k_val + (1.0 - gamma) * omega_n_val
+            psis.append(psi)
+            m_c = self.maximum_margin * (psi)
             margins[c] = m_c
 
         return margins, scales.detach(), gamma, psis
@@ -531,9 +545,9 @@ class Trainer:
             )
 
             log.print("Scales: ", self.current_scales)
-            log.print("Margins: ", self.current_scales)
+            log.print("Margins: ", self.current_margins)
             log.print("Gamma: ", self.current_gamma)
-            log.print("Psis: ", self.current_psis)
+            log.print("Psis: ", [f"{x:.4f}" for x in self.current_psis])
 
             log.print(
                 f"PPC Loss: {loss_ppc.item()}",
