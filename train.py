@@ -22,9 +22,11 @@ BACKBONE_REPO = "Salesforce/codet5-base"
 # ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
 # Please refer the original paper to adjust the hyperparameters
-S0 = 30
-MOMENTUM = 0.999
 
+# -- Model Hyperparameter
+S0 = 30
+
+# -- Training Hyperparameters
 BATCH_SIZE = 40
 LEARNING_RATE = 2e-5
 WEIGHT_DECAY = 1e-2
@@ -33,12 +35,12 @@ RANDOM_SEED = 42
 # ============================ Training Settings=================================
 # Fill your device here. "cuda","cuda:0","cuda:1","cuda:2", etc.
 # Mixed-precision relies on CUDA, and therefore training on CPU is NOT supported.
-DEVICE = "cuda:2"
+DEVICE = "cuda:0"
 MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
 MAX_CHECKPOINTS = 1
 OUTPUT_DIR = os.path.join(
-    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}_ag_rv"
+    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}_kp"
 )
 
 
@@ -54,7 +56,6 @@ def main():
         weight_decay=WEIGHT_DECAY,
         random_seed=RANDOM_SEED,
         s0=S0,
-        momentum=MOMENTUM,
     )
 
     train_config = TrainConfig(

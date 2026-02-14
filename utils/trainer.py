@@ -22,12 +22,13 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import prototype_consistency_loss, kappa_loss
+from utils.loss import kappa_loss, proto_loss_vmf
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     compute_class_separation_index,
     compute_dunn_index,
     estimate_vmf_concentration,
+    evaluate_etf_proximity,
     geometric_median,
     l2_norm,
 )
@@ -76,8 +77,11 @@ class Trainer:
             self.model_config.S0,
             device=self.train_config.DEVICE,
         )
-        self.current_gamma = 0
-        self.current_psis = None
+        self.current_kappas = torch.full(
+            (self.num_classes,),
+            0,
+            device=self.train_config.DEVICE,
+        )
 
         self.model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
@@ -103,7 +107,6 @@ class Trainer:
 
         optimizer_params = [
             {"params": self.model.parameters()},
-            {"params": [self.log_lambda_ppc], "lr": self.model_config.LEARNING_RATE},
         ]
 
         self.optimizer = torch.optim.AdamW(
@@ -142,12 +145,15 @@ class Trainer:
         }
 
     def _compute_adaptive_params(self, embeddings, labels):
-        margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
+        device = self.train_config.DEVICE
+        C = self.num_classes
+        d = embeddings.shape[1]  # embedding dimension
+
+        margins = torch.zeros(C, device=device)
         kappas = []
-        psis = []
 
         # ===== estimate class-wise vMF concentration =====
-        for c in range(self.num_classes):
+        for c in range(C):
             mask = labels == c
             if mask.sum() == 0:
                 kappas.append(1e-6)
@@ -156,76 +162,20 @@ class Trainer:
             kappa = estimate_vmf_concentration(class_embs)
             kappas.append(kappa)
 
-        kappas = torch.tensor(kappas, device=self.train_config.DEVICE)
+        kappas = torch.tensor(kappas, device=device).clamp(min=1e-6)
 
-        # ===== class-wise adaptive scale =====
+        margins = torch.sqrt((d - 1) / kappas)
+
+        # ===== robust z-score normalization =====
         kappa_med = kappas.median()
         mad = (kappas - kappa_med).abs().median().clamp(min=1e-6)
-        
+
         z = (kappas - kappa_med) / mad
-        
-        # smooth monotonic positive mapping
-        scales = self.model_config.S0 * (1.0 + torch.tanh(z))
-        
-        # optional safety clamp
-        scales = scales.clamp(
-            min=0.1 * self.model_config.S0,
-            max=2.0 * self.model_config.S0
-        )
 
-        # scales = torch.full_like(kappas, self.model_config.S0)
+        # positive scale via exp (recommended)
+        scales = self.model_config.S0 * z
 
-        # ===== difficulty-aware weight omega_k =====
-        kappas_np = kappas.detach().cpu().numpy()
-        mu_k = np.mean(kappas_np)
-        sigma_k = np.std(kappas_np) + 1e-8
-        kappas_norm = torch.from_numpy((kappas_np - mu_k) / sigma_k).to(
-            self.train_config.DEVICE
-        )
-
-        omega_k = torch.sigmoid(0.5 * kappas_norm)  # [C]
-
-        # ===== frequency-aware weight omega_n =====
-        omega_f_list = []
-        for c in range(self.num_classes):
-            n_c = self.class_counts.get(c, 1)
-            k = self.max_class_count  # max |D_y|
-            w = (torch.cos(torch.pi * torch.tensor(n_c) / k) + 1) / 2
-            omega_f_list.append(w.item())
-
-        omega_f_vec = torch.tensor(omega_f_list, device=self.train_config.DEVICE)
-
-        # ===== Convert to probability distributions (sum to 1) =====
-        def to_prob(x):
-            return x / (x.sum() + 1e-8)
-
-        p_k = to_prob(omega_k)
-        p_n = to_prob(omega_f_vec)
-
-        # ===== Adaptive gamma via Jensen-Shannon Divergence (JSD) =====
-        # Compute midpoint distribution M = 0.5 * (P + Q)
-        m = 0.5 * (p_k + p_n)
-
-        # Compute KL(P || M) and KL(Q || M) with numerical stability
-        eps = 1e-8
-        kl_pm = torch.sum(p_k * torch.log((p_k + eps) / (m + eps)))
-        kl_qm = torch.sum(p_n * torch.log((p_n + eps) / (m + eps)))
-
-        jsd = 0.5 * (kl_pm + kl_qm)  # JSD ∈ [0, ln(2)] ≈ [0, 0.693]
-
-        # Normalize JSD to [0, 1] for use as gamma (optional but safe)
-        gamma = (jsd / np.log(2)).clamp(0.0, 1.0).item()
-
-        # ===== final margin =====
-        for c in range(self.num_classes):
-            omega_k_val = omega_k[c].item()
-            omega_n_val = omega_f_vec[c].item()
-            psi = gamma * omega_k_val + (1.0 - gamma) * omega_n_val
-            psis.append(psi)
-            m_c = self.maximum_margin * (psi)
-            margins[c] = m_c
-
-        return margins, scales.detach(), gamma, psis
+        return margins.detach(), scales.detach(), kappas.detach()
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -356,6 +306,7 @@ class Trainer:
             val_embeddings_array,
             np.array([self.class_to_index[k] for k in all_truth_class_keys]),
         )
+        etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
 
         VisualizationHelper.draw_plot_umap(
             val_embeddings_array,
@@ -390,6 +341,7 @@ class Trainer:
             separation_score,
             binary_metrics,
             cwe_metrics,
+            etf_status,
         )
 
     def train(self):
@@ -416,40 +368,43 @@ class Trainer:
             total_kappa_loss = 0.0
             total_combined_loss = 0.0
 
-            momentum_embeddings = []
-            momentum_truth_classes = []
+            # ===== 直接使用当前模型提取特征来构建原型 =====
+            all_embeddings = []
+            all_truth_classes = []
+
+            self.model.eval()  # 切换到 eval 模式以冻结 BN/ Dropout
             with torch.no_grad():
-                for batch in tqdm(train_loader, desc="Updating momentum features"):
-                    embs = self.momentum_model.encoder(
+                for batch in tqdm(train_loader, desc="Extracting features"):
+                    embs = self.model.encoder(
                         batch["input_ids"].to(self.train_config.DEVICE),
                         batch["attention_mask"].to(self.train_config.DEVICE),
                     )
                     embs_norm = l2_norm(embs)
-                    momentum_embeddings.append(embs_norm)
+                    all_embeddings.append(embs_norm)
                     truth_class_indices = [
                         self.class_to_index[k] for k in batch["class_key"]
                     ]
-                    momentum_truth_classes.extend(truth_class_indices)
-            momentum_embeddings = torch.cat(momentum_embeddings, dim=0)
-            momentum_truth_classes = torch.tensor(
-                momentum_truth_classes, device=self.train_config.DEVICE
+                    all_truth_classes.extend(truth_class_indices)
+            self.model.train()  # 切回 train 模式
+
+            all_embeddings = torch.cat(all_embeddings, dim=0)
+            all_truth_classes = torch.tensor(
+                all_truth_classes, device=self.train_config.DEVICE
+            )
+
+            global_avg_prototypes = self._compute_average_prototypes(
+                all_embeddings, all_truth_classes
+            )
+            global_geo_prototypes = self._compute_geometric_prototypes(
+                all_embeddings, all_truth_classes
             )
             (
                 self.current_margins,
                 self.current_scales,
-                self.current_gamma,
-                self.current_psis,
-            ) = self._compute_adaptive_params(
-                momentum_embeddings, momentum_truth_classes
-            )
+                self.current_kappas,
+            ) = self._compute_adaptive_params(all_embeddings, all_truth_classes)
 
-            global_avg_prototypes = self._compute_average_prototypes(
-                momentum_embeddings, momentum_truth_classes
-            )
-            global_geo_prototypes = self._compute_geometric_prototypes(
-                momentum_embeddings, momentum_truth_classes
-            )
-
+            # ===== 正式训练阶段 =====
             total_loss = 0.0
             num_samples_in_epoch = 0
             progress_bar = tqdm(train_loader, desc="Training")
@@ -474,31 +429,22 @@ class Trainer:
                         self.current_margins,
                     )
                     loss_kappa = kappa_loss(logits, truth_class_indices)
+
                     # ===== Prototype–Prototype Consistency =====
-                    lambda_ppc = torch.exp(self.log_lambda_ppc.float())
                     avg_prototypes = global_avg_prototypes
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
                     )
-                    loss_ppc = prototype_consistency_loss(
+                    proto_loss = proto_loss_vmf(
                         avg_prototypes,
-                        weight_prototypes,
+                        self.current_kappas,
                     )
 
-                    loss = loss_kappa + lambda_ppc * loss_ppc
+                    loss = loss_kappa + proto_loss
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-
-                with torch.no_grad():
-                    for param_q, param_k in zip(
-                        self.model.parameters(), self.momentum_model.parameters()
-                    ):
-                        param_k.data = (
-                            self.model_config.MOMENTUM * param_k.data
-                            + (1 - self.model_config.MOMENTUM) * param_q.data
-                        )
 
                 total_loss += loss.item()
                 total_kappa_loss += loss_kappa.item()
@@ -535,6 +481,7 @@ class Trainer:
                 separation_score,
                 binary_metrics,
                 cwe_metrics,
+                etf_status,
             ) = self._evaluate_epoch(val_loader, epoch)
 
             weights = (
@@ -546,17 +493,20 @@ class Trainer:
 
             log.print("Scales: ", self.current_scales)
             log.print("Margins: ", self.current_margins)
-            log.print("Gamma: ", self.current_gamma)
-            log.print("Psis: ", [f"{x:.4f}" for x in self.current_psis])
-
-            log.print(
-                f"PPC Loss: {loss_ppc.item()}",
-                f"PPC Lambda: {lambda_ppc.item()}",
-            )
+            log.print("Kappas: ", self.current_kappas)
 
             log.print(
                 f"Combined Loss: {avg_train_combined_loss:.4f} | "
-                f"Kappa Loss: {avg_train_kappa_loss:.4f}"
+                f"Kappa Loss: {avg_train_kappa_loss:.4f}| "
+                f"Proto Loss: {proto_loss.item():.4f}",
+            )
+
+            log.print(
+                f"Norm Score:{etf_status['norm_std']:.3f} | "
+                f"ETF Mean Cos:{etf_status['mean_cos']:.4f} | "
+                f"Std Cos:{etf_status['std_cos']:.4f} | "
+                f"Frame Potential Ratio:{etf_status['fp_ratio']:.3f} | "
+                f"ETF Score:{etf_status['etf_score']:.3f}"
             )
 
             log.print(

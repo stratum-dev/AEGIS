@@ -14,9 +14,7 @@ class ModelConfig:
         weight_decay: float,
         random_seed: int,
         s0: float,
-        momentum: float,
     ):
-        # 数据集
         self.SUBSET_NAME = subset_name
         self.DATASET_REPO = dataset_repo
         self.BACKBONE_REPO = backbone_repo
@@ -27,7 +25,6 @@ class ModelConfig:
         self.RANDOM_SEED = random_seed
 
         self.S0 = s0
-        self.MOMENTUM = momentum
 
 
 class TrainConfig:
