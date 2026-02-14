@@ -167,13 +167,8 @@ class Trainer:
         margins = torch.sqrt((d - 1) / kappas)
 
         # ===== robust z-score normalization =====
-        kappa_med = kappas.median()
-        mad = (kappas - kappa_med).abs().median().clamp(min=1e-6)
-
-        z = (kappas - kappa_med) / mad
-
         # positive scale via exp (recommended)
-        scales = self.model_config.S0 * z
+        scales = self.model_config.S0 * torch.exp(torch.log(kappas + 1e-6) - torch.log(kappas).mean())
 
         return margins.detach(), scales.detach(), kappas.detach()
 
@@ -345,12 +340,7 @@ class Trainer:
         )
 
     def train(self):
-        train_loader = DataLoader(
-            self.train_dataset,
-            batch_size=self.model_config.BATCH_SIZE,
-            shuffle=False,
-            collate_fn=custom_collate_fn,
-        )
+
         val_loader = DataLoader(
             self.val_dataset,
             batch_size=self.model_config.BATCH_SIZE,
@@ -359,6 +349,17 @@ class Trainer:
         )
 
         for epoch in range(self.start_epoch, self.train_config.MAX_EPOCHES):
+            g = torch.Generator()
+            g.manual_seed(self.model_config.RANDOM_SEED)
+
+            train_loader = DataLoader(
+                self.train_dataset,
+                batch_size=self.model_config.BATCH_SIZE,
+                shuffle=True,
+                collate_fn=custom_collate_fn,
+                generator=g,
+            )
+
             log.print(
                 f"\nEpoch {epoch}/{self.train_config.MAX_EPOCHES} - At {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
