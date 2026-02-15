@@ -150,7 +150,7 @@ class VisualizationHelper:
             weight = weight_prototypes
 
         # [K, K] cross similarity
-        sim_matrix = torch.matmul(geo, weight.t()).cpu().numpy()
+        sim_matrix = torch.matmul(geo, weight.t()).detach().cpu().numpy()
         sim_percent = sim_matrix * 100.0
 
         class_labels = [f"{idx_to_class[i][1]}" for i in range(len(idx_to_class))]

@@ -19,38 +19,26 @@ def prototype_consistency_loss(
     return loss
 
 
-def proto_loss_vmf(prototypes, kappas, eps=1e-6):
+def proto_loss_etf(prototypes):
+    """
+    prototypes: [C, d], already L2 normalized
+    """
 
     device = prototypes.device
-    C, d = prototypes.shape
+    C = prototypes.size(0)
 
-    kappas = kappas.clamp(min=eps)
+    # Gram matrix
+    G = prototypes @ prototypes.T   # [C,C]
 
-    # alpha_c = sqrt((d-1)/kappa_c)
-    alpha = torch.sqrt((d - 1) / kappas)  # [C]
+    # ETF target off-diagonal value
+    target = -1.0 / (C - 1)
 
-    # cosine similarity matrix
-    G = prototypes @ prototypes.T  # [C, C]
-
-    # build alpha_i + alpha_j
-    alpha_i = alpha.view(C, 1)
-    alpha_j = alpha.view(1, C)
-    alpha_sum = alpha_i + alpha_j  # [C, C]
-
-    # allowed max cosine
-    cos_bound = torch.cos(alpha_sum)
-
-    # violation: mu_i^T mu_j - cos(alpha_i + alpha_j)
-    violation = G - cos_bound
-
-    # remove diagonal
+    # mask diagonal
     eye = torch.eye(C, device=device).bool()
-    violation = violation.masked_fill(eye, 0.0)
 
-    # hinge
-    loss = torch.relu(violation)
+    # only off-diagonal entries
+    off_diag = G[~eye]
 
-    # only count upper triangle (avoid double counting)
-    loss = loss.triu(diagonal=1)
+    loss = ((off_diag - target) ** 2).mean()
 
-    return loss.mean()
+    return loss

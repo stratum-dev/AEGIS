@@ -22,7 +22,7 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import kappa_loss, proto_loss_vmf
+from utils.loss import kappa_loss, proto_loss_etf
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     compute_class_separation_index,
@@ -164,11 +164,14 @@ class Trainer:
 
         kappas = torch.tensor(kappas, device=device).clamp(min=1e-6)
 
-        margins = torch.sqrt((d - 1) / kappas)
+        margins = torch.sqrt((d - 1) / kappas.detach())
 
         # ===== robust z-score normalization =====
-        # positive scale via exp (recommended)
-        scales = self.model_config.S0 * torch.exp(torch.log(kappas + 1e-6) - torch.log(kappas).mean())
+        scales = torch.full(
+            (self.num_classes,),
+            self.model_config.S0,
+            device=self.train_config.DEVICE,
+        )
 
         return margins.detach(), scales.detach(), kappas.detach()
 
@@ -432,13 +435,11 @@ class Trainer:
                     loss_kappa = kappa_loss(logits, truth_class_indices)
 
                     # ===== Prototype–Prototype Consistency =====
-                    avg_prototypes = global_avg_prototypes
                     weight_prototypes = F.normalize(
-                        self.model.kappaface_head.weight.detach(), dim=1
+                        self.model.kappaface_head.weight, dim=1
                     )
-                    proto_loss = proto_loss_vmf(
-                        avg_prototypes,
-                        self.current_kappas,
+                    proto_loss = proto_loss_etf(
+                        weight_prototypes
                     )
 
                     loss = loss_kappa + proto_loss
@@ -485,14 +486,13 @@ class Trainer:
                 etf_status,
             ) = self._evaluate_epoch(val_loader, epoch)
 
-            weights = (
+            layer_weights = (
                 torch.softmax(self.model.encoder.layer_weights, dim=0)
                 .detach()
                 .cpu()
                 .numpy()
             )
 
-            log.print("Scales: ", self.current_scales)
             log.print("Margins: ", self.current_margins)
             log.print("Kappas: ", self.current_kappas)
 
@@ -544,7 +544,7 @@ class Trainer:
                 f"Macro Precision: {cwe_metrics['macro']['precision']:.4f} | "
                 f"HierAcc: {cwe_metrics['hier_acc']:.4f}"
             )
-            log.print(f"Layer fusion weights: {dict(zip((8,9,10,11), weights))}")
+            log.print(f"Layer fusion weights: {dict(zip((8,9,10,11), layer_weights))}")
 
             new_point = {
                 "epoch": epoch,
