@@ -38,7 +38,7 @@ MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
 MAX_CHECKPOINTS = 1
 OUTPUT_DIR = os.path.join(
-    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}_ag_rv"
+    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}_pure-ce"
 )
 
 

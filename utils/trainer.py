@@ -22,7 +22,7 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import prototype_consistency_loss, kappa_loss
+from utils.loss import kappa_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     compute_class_separation_index,
@@ -76,8 +76,6 @@ class Trainer:
             self.model_config.S0,
             device=self.train_config.DEVICE,
         )
-        self.current_gamma = 0
-        self.current_psis = None
 
         self.model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
@@ -97,13 +95,8 @@ class Trainer:
         for param in self.momentum_model.parameters():
             param.requires_grad = False
 
-        self.log_lambda_ppc = torch.nn.Parameter(
-            torch.zeros(1, device=self.train_config.DEVICE)
-        )
-
         optimizer_params = [
             {"params": self.model.parameters()},
-            {"params": [self.log_lambda_ppc], "lr": self.model_config.LEARNING_RATE},
         ]
 
         self.optimizer = torch.optim.AdamW(
@@ -143,89 +136,18 @@ class Trainer:
 
     def _compute_adaptive_params(self, embeddings, labels):
         margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
-        kappas = []
-        psis = []
 
-        # ===== estimate class-wise vMF concentration =====
-        for c in range(self.num_classes):
-            mask = labels == c
-            if mask.sum() == 0:
-                kappas.append(1e-6)
-                continue
-            class_embs = embeddings[mask]
-            kappa = estimate_vmf_concentration(class_embs)
-            kappas.append(kappa)
-
-        kappas = torch.tensor(kappas, device=self.train_config.DEVICE)
-
-        # ===== class-wise adaptive scale =====
-        kappa_med = kappas.median()
-        mad = (kappas - kappa_med).abs().median().clamp(min=1e-6)
-        
-        z = (kappas - kappa_med) / mad
-        
-        # smooth monotonic positive mapping
-        scales = self.model_config.S0 * (1.0 + torch.tanh(z))
-        
         # optional safety clamp
-        scales = scales.clamp(
-            min=0.1 * self.model_config.S0,
-            max=2.0 * self.model_config.S0
+        scales = torch.full(
+            (self.num_classes,),
+            self.model_config.S0,
+            device=self.train_config.DEVICE,
         )
 
-        # scales = torch.full_like(kappas, self.model_config.S0)
-
-        # ===== difficulty-aware weight omega_k =====
-        kappas_np = kappas.detach().cpu().numpy()
-        mu_k = np.mean(kappas_np)
-        sigma_k = np.std(kappas_np) + 1e-8
-        kappas_norm = torch.from_numpy((kappas_np - mu_k) / sigma_k).to(
-            self.train_config.DEVICE
+        return (
+            margins,
+            scales.detach(),
         )
-
-        omega_k = torch.sigmoid(0.5 * kappas_norm)  # [C]
-
-        # ===== frequency-aware weight omega_n =====
-        omega_f_list = []
-        for c in range(self.num_classes):
-            n_c = self.class_counts.get(c, 1)
-            k = self.max_class_count  # max |D_y|
-            w = (torch.cos(torch.pi * torch.tensor(n_c) / k) + 1) / 2
-            omega_f_list.append(w.item())
-
-        omega_f_vec = torch.tensor(omega_f_list, device=self.train_config.DEVICE)
-
-        # ===== Convert to probability distributions (sum to 1) =====
-        def to_prob(x):
-            return x / (x.sum() + 1e-8)
-
-        p_k = to_prob(omega_k)
-        p_n = to_prob(omega_f_vec)
-
-        # ===== Adaptive gamma via Jensen-Shannon Divergence (JSD) =====
-        # Compute midpoint distribution M = 0.5 * (P + Q)
-        m = 0.5 * (p_k + p_n)
-
-        # Compute KL(P || M) and KL(Q || M) with numerical stability
-        eps = 1e-8
-        kl_pm = torch.sum(p_k * torch.log((p_k + eps) / (m + eps)))
-        kl_qm = torch.sum(p_n * torch.log((p_n + eps) / (m + eps)))
-
-        jsd = 0.5 * (kl_pm + kl_qm)  # JSD ∈ [0, ln(2)] ≈ [0, 0.693]
-
-        # Normalize JSD to [0, 1] for use as gamma (optional but safe)
-        gamma = (jsd / np.log(2)).clamp(0.0, 1.0).item()
-
-        # ===== final margin =====
-        for c in range(self.num_classes):
-            omega_k_val = omega_k[c].item()
-            omega_n_val = omega_f_vec[c].item()
-            psi = gamma * omega_k_val + (1.0 - gamma) * omega_n_val
-            psis.append(psi)
-            m_c = self.maximum_margin * (psi)
-            margins[c] = m_c
-
-        return margins, scales.detach(), gamma, psis
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -437,8 +359,6 @@ class Trainer:
             (
                 self.current_margins,
                 self.current_scales,
-                self.current_gamma,
-                self.current_psis,
             ) = self._compute_adaptive_params(
                 momentum_embeddings, momentum_truth_classes
             )
@@ -475,17 +395,12 @@ class Trainer:
                     )
                     loss_kappa = kappa_loss(logits, truth_class_indices)
                     # ===== Prototype–Prototype Consistency =====
-                    lambda_ppc = torch.exp(self.log_lambda_ppc.float())
                     avg_prototypes = global_avg_prototypes
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
                     )
-                    loss_ppc = prototype_consistency_loss(
-                        avg_prototypes,
-                        weight_prototypes,
-                    )
 
-                    loss = loss_kappa + lambda_ppc * loss_ppc
+                    loss = loss_kappa
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -544,20 +459,7 @@ class Trainer:
                 .numpy()
             )
 
-            log.print("Scales: ", self.current_scales)
-            log.print("Margins: ", self.current_margins)
-            log.print("Gamma: ", self.current_gamma)
-            log.print("Psis: ", [f"{x:.4f}" for x in self.current_psis])
-
-            log.print(
-                f"PPC Loss: {loss_ppc.item()}",
-                f"PPC Lambda: {lambda_ppc.item()}",
-            )
-
-            log.print(
-                f"Combined Loss: {avg_train_combined_loss:.4f} | "
-                f"Kappa Loss: {avg_train_kappa_loss:.4f}"
-            )
+            log.print(f"Kappa Loss: {avg_train_kappa_loss:.4f}")
 
             log.print(
                 f"CH Score: {ch_score:.4f} | "
