@@ -77,7 +77,11 @@ class Trainer:
             self.model_config.S0,
             device=self.train_config.DEVICE,
         )
-        self.current_gamma = 0
+        self.current_kappas_norm = torch.full(
+            (self.num_classes,),
+            0,
+            device=self.train_config.DEVICE,
+        )
         self.current_psis = None
 
         self.model: AEGISModel = AEGISModel(
@@ -181,37 +185,16 @@ class Trainer:
 
         omega_f_vec = torch.tensor(omega_f_list, device=self.train_config.DEVICE)
 
-        # ===== Convert to probability distributions (sum to 1) =====
-        def to_prob(x):
-            return x / (x.sum() + 1e-8)
-
-        p_k = to_prob(omega_k)
-        p_n = to_prob(omega_f_vec)
-
-        # ===== Adaptive gamma via Jensen-Shannon Divergence (JSD) =====
-        # Compute midpoint distribution M = 0.5 * (P + Q)
-        m = 0.5 * (p_k + p_n)
-
-        # Compute KL(P || M) and KL(Q || M) with numerical stability
-        eps = 1e-8
-        kl_pm = torch.sum(p_k * torch.log((p_k + eps) / (m + eps)))
-        kl_qm = torch.sum(p_n * torch.log((p_n + eps) / (m + eps)))
-
-        jsd = 0.5 * (kl_pm + kl_qm)  # JSD ∈ [0, ln(2)] ≈ [0, 0.693]
-
-        # Normalize JSD to [0, 1] for use as gamma (optional but safe)
-        gamma = (jsd / np.log(2)).clamp(0.0, 1.0).item()
-
         # ===== final margin =====
         for c in range(self.num_classes):
             omega_k_val = omega_k[c].item()
             omega_n_val = omega_f_vec[c].item()
-            psi = gamma * omega_k_val + (1.0 - gamma) * omega_n_val
+            psi = 0.5 * omega_k_val + 0.5 * omega_n_val
             psis.append(psi)
             m_c = self.maximum_margin * (psi)
             margins[c] = m_c
 
-        return margins, scales.detach(), gamma, psis
+        return margins, scales.detach(),kappas_norm.detach(), psis
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -427,7 +410,7 @@ class Trainer:
             (
                 self.current_margins,
                 self.current_scales,
-                self.current_gamma,
+                self.current_kappas_norm,
                 self.current_psis,
             ) = self._compute_adaptive_params(
                 momentum_embeddings, momentum_truth_classes
@@ -536,7 +519,7 @@ class Trainer:
 
             log.print("Scales: ", self.current_scales)
             log.print("Margins: ", self.current_margins)
-            log.print("Gamma: ", self.current_gamma)
+            log.print("Kappas (Norm): ", self.current_kappas_norm)
             log.print("Psis: ", [f"{x:.4f}" for x in self.current_psis])
 
             log.print(
