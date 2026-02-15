@@ -13,8 +13,7 @@ class RoBERTaEncoder(nn.Module):
             backbone_name, output_hidden_states=True
         )
         self.roberta = AutoModelForTextEncoding.from_pretrained(
-            backbone_name, config=self.backbone_config,
-            local_files_only=True
+            backbone_name, config=self.backbone_config, local_files_only=True
         )
         self.layers_to_concat = layers_to_concat
         self.hidden_size = self.backbone_config.hidden_size

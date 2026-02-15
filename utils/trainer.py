@@ -28,6 +28,7 @@ from utils.calc import (
     compute_class_separation_index,
     compute_dunn_index,
     estimate_vmf_concentration,
+    evaluate_etf_proximity,
     geometric_median,
     l2_norm,
 )
@@ -97,13 +98,8 @@ class Trainer:
         for param in self.momentum_model.parameters():
             param.requires_grad = False
 
-        self.log_lambda_ppc = torch.nn.Parameter(
-            torch.zeros(1, device=self.train_config.DEVICE)
-        )
-
         optimizer_params = [
             {"params": self.model.parameters()},
-            {"params": [self.log_lambda_ppc], "lr": self.model_config.LEARNING_RATE},
         ]
 
         self.optimizer = torch.optim.AdamW(
@@ -160,7 +156,7 @@ class Trainer:
 
         # ===== class-wise adaptive scale =====
         kappa_med = kappas.median()
-        kappa_med = kappa_med.clamp(min=1e-6) 
+        kappa_med = kappa_med.clamp(min=1e-6)
         scales = self.model_config.S0 * (kappas / kappa_med)
 
         # scales = torch.full_like(kappas, self.model_config.S0)
@@ -336,7 +332,7 @@ class Trainer:
             [self.class_to_index[k] for k in all_truth_class_keys],
             all_pred_class_indices,
         )
-
+        etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
         val_embeddings_array = np.concatenate(all_val_embeddings, axis=0)
         dunn_score = compute_dunn_index(
             val_embeddings_array,
@@ -380,15 +376,11 @@ class Trainer:
             separation_score,
             binary_metrics,
             cwe_metrics,
+            etf_status,
         )
 
     def train(self):
-        train_loader = DataLoader(
-            self.train_dataset,
-            batch_size=self.model_config.BATCH_SIZE,
-            shuffle=False,
-            collate_fn=custom_collate_fn,
-        )
+
         val_loader = DataLoader(
             self.val_dataset,
             batch_size=self.model_config.BATCH_SIZE,
@@ -397,6 +389,14 @@ class Trainer:
         )
 
         for epoch in range(self.start_epoch, self.train_config.MAX_EPOCHES):
+            g = torch.Generator()
+            g.manual_seed(self.model_config.RANDOM_SEED)
+            train_loader = DataLoader(
+                self.train_dataset,
+                batch_size=self.model_config.BATCH_SIZE,
+                shuffle=False,
+                collate_fn=custom_collate_fn,
+            )
             log.print(
                 f"\nEpoch {epoch}/{self.train_config.MAX_EPOCHES} - At {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
@@ -465,7 +465,6 @@ class Trainer:
                     )
                     loss_kappa = kappa_loss(logits, truth_class_indices)
                     # ===== Prototype–Prototype Consistency =====
-                    lambda_ppc = torch.exp(self.log_lambda_ppc.float())
                     avg_prototypes = global_avg_prototypes
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
@@ -475,7 +474,7 @@ class Trainer:
                         weight_prototypes,
                     )
 
-                    loss = loss_kappa + lambda_ppc * loss_ppc
+                    loss = loss_kappa + loss_ppc
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -525,6 +524,7 @@ class Trainer:
                 separation_score,
                 binary_metrics,
                 cwe_metrics,
+                etf_status,
             ) = self._evaluate_epoch(val_loader, epoch)
 
             weights = (
@@ -540,13 +540,17 @@ class Trainer:
             log.print("Psis: ", [f"{x:.4f}" for x in self.current_psis])
 
             log.print(
-                f"PPC Loss: {loss_ppc.item()}",
-                f"PPC Lambda: {lambda_ppc.item()}",
+                f"Norm Score:{etf_status['norm_std']:.4f} | "
+                f"ETF Mean Cos:{etf_status['mean_cos']:.4f} | "
+                f"Std Cos:{etf_status['std_cos']:.4f} | "
+                f"Frame Potential Ratio:{etf_status['fp_ratio']:.4f} | "
+                f"ETF Score:{etf_status['etf_score']:.4f}"
             )
 
             log.print(
                 f"Combined Loss: {avg_train_combined_loss:.4f} | "
-                f"Kappa Loss: {avg_train_kappa_loss:.4f}"
+                f"Kappa Loss: {avg_train_kappa_loss:.4f} | ",
+                f"PPC Loss: {loss_ppc.item()}",
             )
 
             log.print(

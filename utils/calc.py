@@ -31,6 +31,62 @@ def cosine_similarity_torch(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.sum(x * y, dim=-1)
 
 
+def evaluate_etf_proximity(prototypes: torch.Tensor):
+    """
+    prototypes: [C, D], assumed L2-normalized
+    return: dict with ETF diagnostics
+    """
+
+    C = prototypes.size(0)
+    device = prototypes.device
+
+    # Gram matrix
+    G = prototypes @ prototypes.T
+
+    eye = torch.eye(C, device=device).bool()
+    off = G[~eye]
+
+    # === theoretical simplex value ===
+    target = -1.0 / (C - 1)
+
+    # === metrics ===
+    mean_cos = off.mean().item()
+    std_cos = off.std().item()
+    max_dev = (off - target).abs().max().item()
+    mse = ((off - target) ** 2).mean().item()
+
+    # === frame potential ===
+    # FP = sum_ij <wi,wj>^2
+    fp = (G**2).sum().item()
+
+    # ETF minimum FP = C^2 / D  (for unit vectors)
+    D = prototypes.size(1)
+    fp_opt = (C**2) / D
+
+    fp_ratio = fp / fp_opt
+
+    # === collapse score (prototype norm sanity) ===
+    norms = prototypes.norm(dim=1)
+    norm_std = norms.std().item()
+
+    # === heuristic ETF score (0~1, higher better) ===
+    score = torch.exp(-10 * torch.tensor(mse)).item()
+
+    return {
+        "C": C,
+        "target_cos": target,
+        "mean_cos": mean_cos,
+        "std_cos": std_cos,
+        "max_abs_dev": max_dev,
+        "mse_to_simplex": mse,
+        "frame_potential": fp,
+        "fp_optimal": fp_opt,
+        "fp_ratio": fp_ratio,
+        "norm_std": norm_std,
+        "etf_score": score,
+    }
+
+
 def estimate_vmf_concentration(embeddings: torch.Tensor) -> float:
     """
     Estimate vMF concentration parameter κ from normalized embeddings.
