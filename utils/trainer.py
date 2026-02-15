@@ -160,18 +160,8 @@ class Trainer:
 
         # ===== class-wise adaptive scale =====
         kappa_med = kappas.median()
-        mad = (kappas - kappa_med).abs().median().clamp(min=1e-6)
-        
-        z = (kappas - kappa_med) / mad
-        
-        # smooth monotonic positive mapping
-        scales = self.model_config.S0 * (1.0 + torch.tanh(z))
-        
-        # optional safety clamp
-        scales = scales.clamp(
-            min=0.1 * self.model_config.S0,
-            max=2.0 * self.model_config.S0
-        )
+        kappa_med = kappa_med.clamp(min=1e-6) 
+        scales = self.model_config.S0 * (kappas / kappa_med)
 
         # scales = torch.full_like(kappas, self.model_config.S0)
 
