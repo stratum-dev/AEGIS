@@ -156,14 +156,20 @@ class Trainer:
             kappa = estimate_vmf_concentration(class_embs)
             kappas.append(kappa)
 
-        kappas = torch.tensor(kappas, device=self.train_config.DEVICE)
+        kappas = torch.tensor(kappas, device=self.train_config.DEVICE).clamp(min=1e-6)
 
-        # ===== class-wise adaptive scale =====
-        kappa_med = kappas.median()
-        kappa_med = kappa_med.clamp(min=1e-6)
-        scales = self.model_config.S0 * (kappas / kappa_med)
+        C = self.num_classes
+        s0 = self.model_config.S0
 
-        # scales = torch.full_like(kappas, self.model_config.S0)
+        # ============================================================
+        # ✅ Scheme 1: log-kappa softmax relative scaling (stable)
+        # ============================================================
+
+        u = torch.log(kappas)
+        r = torch.softmax(u / 2, dim=0) * C  # mean = 1
+        scales = s0 * r  # mean = s0
+
+        # ============================================================
 
         # ===== difficulty-aware weight omega_k =====
         kappas_np = kappas.detach().cpu().numpy()
@@ -179,7 +185,7 @@ class Trainer:
         omega_f_list = []
         for c in range(self.num_classes):
             n_c = self.class_counts.get(c, 1)
-            k = self.max_class_count  # max |D_y|
+            k = self.max_class_count
             w = (torch.cos(torch.pi * torch.tensor(n_c) / k) + 1) / 2
             omega_f_list.append(w.item())
 
@@ -187,14 +193,11 @@ class Trainer:
 
         # ===== final margin =====
         for c in range(self.num_classes):
-            omega_k_val = omega_k[c].item()
-            omega_n_val = omega_f_vec[c].item()
-            psi = 0.5 * omega_k_val + 0.5 * omega_n_val
+            psi = 0.5 * omega_k[c].item() + 0.5 * omega_f_vec[c].item()
             psis.append(psi)
-            m_c = self.maximum_margin * (psi)
-            margins[c] = m_c
+            margins[c] = self.maximum_margin * psi
 
-        return margins, scales.detach(),kappas_norm.detach(), psis
+        return margins, scales.detach(), kappas_norm.detach(), psis
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
