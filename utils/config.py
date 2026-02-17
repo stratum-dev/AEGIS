@@ -14,7 +14,7 @@ class ModelConfig:
         weight_decay: float,
         random_seed: int,
         s0: float,
-        momentum: float,
+        m0: float,
     ):
         # 数据集
         self.SUBSET_NAME = subset_name
@@ -27,7 +27,7 @@ class ModelConfig:
         self.RANDOM_SEED = random_seed
 
         self.S0 = s0
-        self.MOMENTUM = momentum
+        self.M0 = m0
 
 
 class TrainConfig:

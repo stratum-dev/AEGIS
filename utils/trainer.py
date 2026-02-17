@@ -64,7 +64,6 @@ class Trainer:
         self.class_to_index = {cls: idx for idx, cls in enumerate(class_list)}
         self.index_to_class = {idx: cls for cls, idx in self.class_to_index.items()}
         self.num_classes = len(self.class_to_index)
-        self.maximum_margin = 0.2
 
         self.all_points = []
         self.pareto_front = []
@@ -72,7 +71,7 @@ class Trainer:
 
         self.current_margins = torch.full(
             (self.num_classes,),
-            self.maximum_margin,
+            self.model_config.M0,
             device=self.train_config.DEVICE,
         ).detach()
         self.current_scales = torch.full(
@@ -91,19 +90,8 @@ class Trainer:
             self.model_config.BACKBONE_REPO,
             self.num_classes,
             self.model_config.S0,
-            self.maximum_margin,
+            self.model_config.M0,
         ).to(self.train_config.DEVICE)
-
-        self.momentum_model: AEGISModel = AEGISModel(
-            self.model_config.BACKBONE_REPO,
-            self.num_classes,
-            self.model_config.S0,
-            self.maximum_margin,
-        ).to(self.train_config.DEVICE)
-        self.momentum_model.load_state_dict(self.model.state_dict())
-        self.momentum_model.eval()
-        for param in self.momentum_model.parameters():
-            param.requires_grad = False
 
         optimizer_params = [
             {"params": self.model.parameters()},
@@ -192,13 +180,13 @@ class Trainer:
             w = (torch.cos(torch.pi * torch.tensor(n_c) / k) + 1) / 2
             omega_f_list.append(w.item())
 
-        omega_f_vec = torch.tensor(omega_f_list, device=self.train_config.DEVICE)
+        omega_f = torch.tensor(omega_f_list, device=self.train_config.DEVICE)
 
         # ===== final margin =====
         for c in range(self.num_classes):
-            psi = 0.5 * omega_k[c].item() + 0.5 * omega_f_vec[c].item()
+            psi = 0.5 * omega_k[c].item() + 0.5 * omega_f[c].item()
             psis.append(psi)
-            margins[c] = self.maximum_margin * psi
+            margins[c] = self.model_config.M0 * psi
 
         return margins, scales.detach(), kappas_norm.detach(), psis
 
@@ -379,7 +367,6 @@ class Trainer:
         )
 
     def train(self):
-
         val_loader = DataLoader(
             self.val_dataset,
             batch_size=self.model_config.BATCH_SIZE,
@@ -393,7 +380,7 @@ class Trainer:
             train_loader = DataLoader(
                 self.train_dataset,
                 batch_size=self.model_config.BATCH_SIZE,
-                shuffle=False,
+                shuffle=True,
                 collate_fn=custom_collate_fn,
             )
             log.print(
@@ -405,38 +392,39 @@ class Trainer:
             total_kappa_loss = 0.0
             total_combined_loss = 0.0
 
-            momentum_embeddings = []
-            momentum_truth_classes = []
+            online_embeddings = []
+            online_truth_classes = []
             with torch.no_grad():
-                for batch in tqdm(train_loader, desc="Updating momentum features"):
-                    embs = self.momentum_model.encoder(
+                for batch in tqdm(train_loader, desc="Computing online features"):
+                    embs = self.model.encoder(
                         batch["input_ids"].to(self.train_config.DEVICE),
                         batch["attention_mask"].to(self.train_config.DEVICE),
                     )
                     embs_norm = l2_norm(embs)
-                    momentum_embeddings.append(embs_norm)
+                    online_embeddings.append(embs_norm)
                     truth_class_indices = [
                         self.class_to_index[k] for k in batch["class_key"]
                     ]
-                    momentum_truth_classes.extend(truth_class_indices)
-            momentum_embeddings = torch.cat(momentum_embeddings, dim=0)
-            momentum_truth_classes = torch.tensor(
-                momentum_truth_classes, device=self.train_config.DEVICE
+                    online_truth_classes.extend(truth_class_indices)
+            online_embeddings = torch.cat(online_embeddings, dim=0)
+            online_truth_classes = torch.tensor(
+                online_truth_classes, device=self.train_config.DEVICE
             )
+
+            # 基于在线特征计算自适应参数
             (
                 self.current_margins,
                 self.current_scales,
                 self.current_kappas_norm,
                 self.current_psis,
-            ) = self._compute_adaptive_params(
-                momentum_embeddings, momentum_truth_classes
-            )
+            ) = self._compute_adaptive_params(online_embeddings, online_truth_classes)
 
+            # 计算全局原型
             global_avg_prototypes = self._compute_average_prototypes(
-                momentum_embeddings, momentum_truth_classes
+                online_embeddings, online_truth_classes
             )
             global_geo_prototypes = self._compute_geometric_prototypes(
-                momentum_embeddings, momentum_truth_classes
+                online_embeddings, online_truth_classes
             )
 
             total_loss = 0.0
@@ -463,6 +451,7 @@ class Trainer:
                         self.current_margins,
                     )
                     loss_kappa = kappa_loss(logits, truth_class_indices)
+
                     # ===== Prototype–Prototype Consistency =====
                     avg_prototypes = global_avg_prototypes
                     weight_prototypes = F.normalize(
@@ -478,15 +467,6 @@ class Trainer:
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-
-                with torch.no_grad():
-                    for param_q, param_k in zip(
-                        self.model.parameters(), self.momentum_model.parameters()
-                    ):
-                        param_k.data = (
-                            self.model_config.MOMENTUM * param_k.data
-                            + (1 - self.model_config.MOMENTUM) * param_q.data
-                        )
 
                 total_loss += loss.item()
                 total_kappa_loss += loss_kappa.item()
@@ -504,6 +484,7 @@ class Trainer:
             avg_train_kappa_loss = total_kappa_loss / num_batches
             avg_train_combined_loss = total_combined_loss / num_batches
 
+            # ===== 保存当前epoch的原型（从在线编码器计算）=====
             (
                 self.train_avg_prototypes,
                 self.train_geo_prototypes,
@@ -513,6 +494,7 @@ class Trainer:
                 global_geo_prototypes,
                 weight_prototypes,
             )
+
             (
                 ch_score,
                 nmi_score,
@@ -548,8 +530,8 @@ class Trainer:
 
             log.print(
                 f"Combined Loss: {avg_train_combined_loss:.4f} | "
-                f"Kappa Loss: {avg_train_kappa_loss:.4f} | ",
-                f"PPC Loss: {loss_ppc.item()}",
+                f"Kappa Loss: {avg_train_kappa_loss:.4f} | "
+                f"PPC Loss: {loss_ppc.item():.4f}"
             )
 
             log.print(
@@ -635,7 +617,7 @@ class Trainer:
                 f"Epoch {epoch} Finished at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
             )
 
-            if epoch >= self.train_config.MAX_EPOCHES:
+            if epoch >= self.train_config.MAX_EPOCHES - 1:
                 log.print(
                     f"🛑 Stopping triggered after reaching max epoches: {self.train_config.MAX_EPOCHES}."
                 )
