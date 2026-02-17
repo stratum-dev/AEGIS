@@ -78,7 +78,7 @@ class Trainer:
             (self.num_classes,),
             self.model_config.S0,
             device=self.train_config.DEVICE,
-        )
+        ).detach()  # ✅ 修复：添加 detach()
         self.current_kappas_norm = torch.full(
             (self.num_classes,),
             0,
@@ -108,9 +108,15 @@ class Trainer:
         self.class_counts = self._count_classes(train_dataset)
         self.max_class_count = max(self.class_counts.values())
         self.start_epoch = 0
-        self.train_avg_prototypes = None
-        self.train_geo_prototypes = None
-        self.train_weight_prototypes = None
+        self.train_avg_prototypes = torch.zeros(
+            self.num_classes, self.model.feature_dim, device=self.train_config.DEVICE
+        )
+        self.train_geo_prototypes = torch.zeros(
+            self.num_classes, self.model.feature_dim, device=self.train_config.DEVICE
+        )
+        self.train_weight_prototypes = F.normalize(
+            self.model.kappaface_head.weight.detach(), dim=1
+        )
 
     def _is_dominated(self, new_point, existing_point):
         b_new, m_new = new_point["binary_f1"], new_point["macro_f1"]
@@ -188,7 +194,12 @@ class Trainer:
             psis.append(psi)
             margins[c] = self.model_config.M0 * psi
 
-        return margins, scales.detach(), kappas_norm.detach(), psis
+        return (
+            margins.detach(),
+            scales.detach(),
+            kappas_norm.detach(),
+            psis,
+        )  # ✅ 修复：margins 添加 detach()
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -351,7 +362,7 @@ class Trainer:
         )
 
         save_to_json(binary_metrics, binary_file_path)
-        save_to_json(cwe_file_path, cwe_metrics)
+        save_to_json(cwe_metrics, cwe_file_path)
 
         return (
             clustering_metrics["ch_score"],
@@ -380,6 +391,7 @@ class Trainer:
             train_loader = DataLoader(
                 self.train_dataset,
                 batch_size=self.model_config.BATCH_SIZE,
+                generator=g,
                 shuffle=True,
                 collate_fn=custom_collate_fn,
             )
@@ -392,45 +404,16 @@ class Trainer:
             total_kappa_loss = 0.0
             total_combined_loss = 0.0
 
+            # ===== 新增：用于累积特征的列表 =====
             online_embeddings = []
             online_truth_classes = []
-            with torch.no_grad():
-                for batch in tqdm(train_loader, desc="Computing online features"):
-                    embs = self.model.encoder(
-                        batch["input_ids"].to(self.train_config.DEVICE),
-                        batch["attention_mask"].to(self.train_config.DEVICE),
-                    )
-                    embs_norm = l2_norm(embs)
-                    online_embeddings.append(embs_norm)
-                    truth_class_indices = [
-                        self.class_to_index[k] for k in batch["class_key"]
-                    ]
-                    online_truth_classes.extend(truth_class_indices)
-            online_embeddings = torch.cat(online_embeddings, dim=0)
-            online_truth_classes = torch.tensor(
-                online_truth_classes, device=self.train_config.DEVICE
-            )
-
-            # 基于在线特征计算自适应参数
-            (
-                self.current_margins,
-                self.current_scales,
-                self.current_kappas_norm,
-                self.current_psis,
-            ) = self._compute_adaptive_params(online_embeddings, online_truth_classes)
-
-            # 计算全局原型
-            global_avg_prototypes = self._compute_average_prototypes(
-                online_embeddings, online_truth_classes
-            )
-            global_geo_prototypes = self._compute_geometric_prototypes(
-                online_embeddings, online_truth_classes
-            )
 
             total_loss = 0.0
             num_samples_in_epoch = 0
             progress_bar = tqdm(train_loader, desc="Training")
             batch_start_time = time.time()
+
+            # ===== 合并为单次遍历：同时提取特征和训练 =====
             for batch in progress_bar:
                 input_ids = batch["input_ids"].to(self.train_config.DEVICE)
                 batch_size = len(batch["input_ids"])
@@ -441,24 +424,27 @@ class Trainer:
                 )
 
                 num_samples_in_epoch += batch_size
+
+                # ===== 原有训练逻辑保持不变 =====
                 self.optimizer.zero_grad()
                 with autocast(device_type="cuda"):
                     features_norm, logits = self.model(
                         input_ids,
                         attention_mask,
                         truth_class_indices,
-                        self.current_scales,
-                        self.current_margins,
+                        self.current_scales.detach(),  # ✅ 修复：显式 detach
+                        self.current_margins.detach(),  # ✅ 修复：显式 detach
                     )
+                    online_embeddings.append(features_norm)
+                    online_truth_classes.append(truth_class_indices)
                     loss_kappa = kappa_loss(logits, truth_class_indices)
 
                     # ===== Prototype–Prototype Consistency =====
-                    avg_prototypes = global_avg_prototypes
                     weight_prototypes = F.normalize(
-                        self.model.kappaface_head.weight.detach(), dim=1
+                        self.model.kappaface_head.weight, dim=1
                     )
                     loss_ppc = prototype_consistency_loss(
-                        avg_prototypes,
+                        self.train_avg_prototypes,
                         weight_prototypes,
                     )
 
@@ -471,7 +457,23 @@ class Trainer:
                 total_loss += loss.item()
                 total_kappa_loss += loss_kappa.item()
                 total_combined_loss += loss.item()
-                progress_bar.set_postfix({"loss": loss.item()})
+                progress_bar.set_postfix({"Loss": loss.item()})
+                progress_bar.set_postfix({"Kappa loss": loss_kappa.item()})
+                progress_bar.set_postfix({"PPC loss": loss_ppc.item()})
+
+            # ===== 新增：epoch结束后统一计算自适应参数（供下一epoch使用）=====
+            online_embeddings = torch.cat(online_embeddings, dim=0)
+            online_truth_classes = torch.cat(
+                online_truth_classes, dim=0
+            )  # ✅ 修复：改用 torch.cat()
+
+            # 基于在线特征计算自适应参数
+            (
+                self.current_margins,
+                self.current_scales,
+                self.current_kappas_norm,
+                self.current_psis,
+            ) = self._compute_adaptive_params(online_embeddings, online_truth_classes)
 
             train_duration = time.time() - batch_start_time
             avg_sample_time_ms = (
@@ -485,15 +487,13 @@ class Trainer:
             avg_train_combined_loss = total_combined_loss / num_batches
 
             # ===== 保存当前epoch的原型（从在线编码器计算）=====
-            (
-                self.train_avg_prototypes,
-                self.train_geo_prototypes,
-                self.train_weight_prototypes,
-            ) = (
-                global_avg_prototypes,
-                global_geo_prototypes,
-                weight_prototypes,
-            )
+            self.train_avg_prototypes = self._compute_average_prototypes(
+                online_embeddings, online_truth_classes
+            ).detach()
+            self.train_geo_prototypes = self._compute_geometric_prototypes(
+                online_embeddings, online_truth_classes
+            ).detach()
+            self.train_weight_prototypes = weight_prototypes.detach()
 
             (
                 ch_score,
