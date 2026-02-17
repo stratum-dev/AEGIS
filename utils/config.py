@@ -48,10 +48,16 @@ class TrainConfig:
         self.PROTOTYPE_SIMILARITY_OUTPUT_DIR = os.path.join(
             self.OUTPUT_DIR, "val_prototype_similarity_matrix"
         )
+        self.CWE_METRICS_OUTPUT_DIR = os.path.join(self.OUTPUT_DIR, "val_cwe_metrics")
+        self.BINARY_METRICS_OUTPUT_DIR = os.path.join(
+            self.OUTPUT_DIR, "val_binary_metrics"
+        )
         self.MAX_CHECKPOINTS = max_checkpoints
         self.MAX_EPOCHES = max_epoches
         self.EARLY_STOP_PATIENCE = early_stop_patience
 
+        os.makedirs(self.CWE_METRICS_OUTPUT_DIR, exist_ok=True)
+        os.makedirs(self.BINARY_METRICS_OUTPUT_DIR, exist_ok=True)
         os.makedirs(self.OUTPUT_DIR, exist_ok=True)
         os.makedirs(self.PROTOTYPE_ALIGNMENT_OUTPUT_DIR, exist_ok=True)
         os.makedirs(self.UMAP_OUTPUT_DIR, exist_ok=True)

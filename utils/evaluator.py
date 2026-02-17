@@ -11,6 +11,7 @@ from utils.aegis import AEGISModel
 from utils.dataset import VulnerabilityDataset, custom_collate_fn
 from utils.metrics import MetricCalculator
 from utils.visual import VisualizationHelper
+from utils.serialize import save_to_json
 
 
 class Evaluator:
@@ -140,7 +141,7 @@ class Evaluator:
         # CWE metrics
         cwe_file = os.path.join(
             self.eval_config.EVALUATION_OUTPUT_DIR,
-            f"multi-class-cwe-metrics-{self.eval_config.EVAL_SPLIT}.json",
+            f"cwe-metrics-{self.eval_config.EVAL_SPLIT}.json",
         )
         with open(cwe_file, "w") as f:
             json.dump(cwe_metrics, f, indent=4)

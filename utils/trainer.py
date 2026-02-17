@@ -1,4 +1,6 @@
 from datetime import datetime
+import json
+import os
 import time
 import warnings
 from collections import Counter
@@ -33,6 +35,7 @@ from utils.calc import (
     l2_norm,
 )
 from utils.logger import log
+from utils.serialize import save_to_json
 
 warnings.filterwarnings("ignore")
 
@@ -61,7 +64,7 @@ class Trainer:
         self.class_to_index = {cls: idx for idx, cls in enumerate(class_list)}
         self.index_to_class = {idx: cls for cls, idx in self.class_to_index.items()}
         self.num_classes = len(self.class_to_index)
-        self.maximum_margin = self.num_classes / (self.num_classes - 1)
+        self.maximum_margin = 0.2
 
         self.all_points = []
         self.pareto_front = []
@@ -351,6 +354,16 @@ class Trainer:
             f"{epoch}.svg",
             f"{self.model_config.SUBSET_NAME} - Val Epoch - {epoch}",
         )
+
+        binary_file_path = os.path.join(
+            self.train_config.BINARY_METRICS_OUTPUT_DIR, f"{epoch}.json"
+        )
+        cwe_file_path = os.path.join(
+            self.train_config.CWE_METRICS_OUTPUT_DIR, f"{epoch}.json"
+        )
+
+        save_to_json(binary_metrics, binary_file_path)
+        save_to_json(cwe_file_path, cwe_metrics)
 
         return (
             clustering_metrics["ch_score"],
