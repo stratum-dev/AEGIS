@@ -6,6 +6,8 @@ import seaborn as sns
 import torch
 from umap import UMAP
 
+from utils.calc import geometric_median
+
 
 class VisualizationHelper:
     """可视化辅助类"""
@@ -54,12 +56,48 @@ class VisualizationHelper:
                 s=20,
                 label="_nolegend_",
             )
+            if (~vuln_mask).any():
+                neg_mask = ~vuln_mask
+
+                points_np = np.stack([x[neg_mask], y[neg_mask]], axis=1)
+                points = torch.from_numpy(points_np).float()
+
+                neg_center = geometric_median(points).cpu().numpy()
+
+                plt.scatter(
+                    neg_center[0],
+                    neg_center[1],
+                    c="black",  # 或者 "dimgray"
+                    marker="X",
+                    s=250,
+                    edgecolors="white",
+                    linewidths=1.5,
+                    zorder=12,
+                )
 
         for cwe in cwe_unique:
             mask = (cwes == cwe) & vuln_mask
             if mask.any():
                 plt.scatter(
                     x[mask], y[mask], c=[cwe_to_color[cwe]], marker="o", s=20, label=cwe
+                )
+                # ===== 计算几何中位点（用你自己的函数）=====
+                points_np = np.stack([x[mask], y[mask]], axis=1)
+                points = torch.from_numpy(points_np).float()
+
+                center = geometric_median(points)  # (2,)
+                center = center.cpu().numpy()
+
+                # ===== 画中心点 =====
+                plt.scatter(
+                    center[0],
+                    center[1],
+                    c=[cwe_to_color[cwe]],
+                    marker="*",
+                    s=250,
+                    edgecolors="black",
+                    linewidths=1.5,
+                    zorder=10,
                 )
 
         plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")

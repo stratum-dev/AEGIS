@@ -24,7 +24,7 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import prototype_consistency_loss, kappa_loss
+from utils.loss import prototype_alignment_loss, kappa_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     compute_class_separation_index,
@@ -163,7 +163,7 @@ class Trainer:
         # ============================================================
 
         u = torch.log(kappas)
-        r = torch.softmax(u / 2, dim=0) * C  # mean = 1
+        r = torch.softmax(u / C, dim=0) * C  # mean = 1
         scales = s0 * r  # mean = s0
 
         # ============================================================
@@ -432,8 +432,8 @@ class Trainer:
                         input_ids,
                         attention_mask,
                         truth_class_indices,
-                        self.current_scales.detach(),  # ✅ 修复：显式 detach
-                        self.current_margins.detach(),  # ✅ 修复：显式 detach
+                        self.current_scales.detach(),
+                        self.current_margins.detach(),
                     )
                     online_embeddings.append(features_norm)
                     online_truth_classes.append(truth_class_indices)
@@ -441,11 +441,11 @@ class Trainer:
 
                     # ===== Prototype–Prototype Consistency =====
                     weight_prototypes = F.normalize(
-                        self.model.kappaface_head.weight, dim=1
+                        self.model.kappaface_head.weight.detach(), dim=1
                     )
-                    loss_ppc = prototype_consistency_loss(
-                        self.train_avg_prototypes,
-                        weight_prototypes,
+
+                    loss_ppc = prototype_alignment_loss(
+                        features_norm, truth_class_indices, weight_prototypes
                     )
 
                     loss = loss_kappa + loss_ppc
@@ -457,9 +457,13 @@ class Trainer:
                 total_loss += loss.item()
                 total_kappa_loss += loss_kappa.item()
                 total_combined_loss += loss.item()
-                progress_bar.set_postfix({"Loss": loss.item()})
-                progress_bar.set_postfix({"Kappa loss": loss_kappa.item()})
-                progress_bar.set_postfix({"PPC loss": loss_ppc.item()})
+                progress_bar.set_postfix(
+                    {
+                        "Loss": f"{loss.item():.4f}",
+                        "Kappa": f"{loss_kappa.item():.4f}",
+                        "PPC": f"{loss_ppc.item():.4f}",
+                    }
+                )
 
             # ===== 新增：epoch结束后统一计算自适应参数（供下一epoch使用）=====
             online_embeddings = torch.cat(online_embeddings, dim=0)

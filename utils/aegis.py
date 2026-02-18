@@ -53,51 +53,51 @@ class KappaLossClassifierHead(nn.Module):
         self.weight = nn.Parameter(torch.Tensor(num_classes, in_features))
         nn.init.xavier_uniform_(self.weight)
 
-    # def forward(self, x, labels, scales, margins):
-    #     # Normalize weight
-    #     weight_norm = l2_norm(self.weight)
-    #     # Cosine similarity matrix: (B, C)
-    #     cos_theta = torch.mm(x, weight_norm.t())
-    #     # Clamp for numerical stability
-    #     cos_theta = cos_theta.clamp(-1.0 + 1e-7, 1.0 - 1e-7)
-
-    #     # Add margins to true class
-    #     one_hot = F.one_hot(labels, num_classes=self.num_classes).float()
-    #     margins_expanded = margins.unsqueeze(0).expand_as(cos_theta)
-    #     cos_theta_m = cos_theta - one_hot * margins_expanded
-
-    #     # Scale
-    #     logits = scales * cos_theta_m
-    #     return logits
-
     def forward(self, x, labels, scales, margins):
-        # normalize class weights
-        weight_norm = F.normalize(self.weight)
-
-        # cosine similarity
+        # Normalize weight
+        weight_norm = l2_norm(self.weight)
+        # Cosine similarity matrix: (B, C)
         cos_theta = torch.mm(x, weight_norm.t())
+        # Clamp for numerical stability
         cos_theta = cos_theta.clamp(-1.0 + 1e-7, 1.0 - 1e-7)
 
-        # sin(theta)
-        sin_theta = torch.sqrt(1.0 - torch.pow(cos_theta, 2))
-
-        # expand margins
-        margins_expand = margins.unsqueeze(0).expand_as(cos_theta)
-
-        cos_m = torch.cos(margins_expand)
-        sin_m = torch.sin(margins_expand)
-
-        # ArcFace formula
-        phi = cos_theta * cos_m - sin_theta * sin_m
-
-        # only apply margin to GT class
+        # Add margins to true class
         one_hot = F.one_hot(labels, num_classes=self.num_classes).float()
-        output = one_hot * phi + (1.0 - one_hot) * cos_theta
+        margins_expanded = margins.unsqueeze(0).expand_as(cos_theta)
+        cos_theta_m = cos_theta - one_hot * margins_expanded
 
-        # class-wise scale (broadcast)
-        logits = output * scales
-
+        # Scale
+        logits = scales * cos_theta_m
         return logits
+
+    # def forward(self, x, labels, scales, margins):
+    #     # normalize class weights
+    #     weight_norm = F.normalize(self.weight)
+
+    #     # cosine similarity
+    #     cos_theta = torch.mm(x, weight_norm.t())
+    #     cos_theta = cos_theta.clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+
+    #     # sin(theta)
+    #     sin_theta = torch.sqrt(1.0 - torch.pow(cos_theta, 2))
+
+    #     # expand margins
+    #     margins_expand = margins.unsqueeze(0).expand_as(cos_theta)
+
+    #     cos_m = torch.cos(margins_expand)
+    #     sin_m = torch.sin(margins_expand)
+
+    #     # ArcFace formula
+    #     phi = cos_theta * cos_m - sin_theta * sin_m
+
+    #     # only apply margin to GT class
+    #     one_hot = F.one_hot(labels, num_classes=self.num_classes).float()
+    #     output = one_hot * phi + (1.0 - one_hot) * cos_theta
+
+    #     # class-wise scale (broadcast)
+    #     logits = output * scales
+
+    #     return logits
 
 
 class AEGISModel(nn.Module):

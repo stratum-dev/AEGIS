@@ -6,13 +6,14 @@ from utils.dataset import VulnerabilityDataset
 from datasets import load_dataset
 from utils.config import ModelConfig, TrainConfig
 from utils.logger import log
+from datetime import datetime
 
 # ============================ Huggingface Repo =================================
 # The dataset repository
 DATASET_REPO = "codemetic/AEGIS"
 # Subset for above repo.
 # Avaliable at: "bigvul", "mvd", "megavul", "draper", "vuldeepecker", "reposvul"
-SUBSET_NAME = "megavul"
+SUBSET_NAME = "primevul-paired"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
@@ -22,12 +23,12 @@ BACKBONE_REPO = "Salesforce/codet5-base"
 # ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
 # Please refer the original paper to adjust the hyperparameters
-S0 = 30
-M0 = 0.5
+S0 = 50
+M0 = 0.3
 
 BATCH_SIZE = 40
 LEARNING_RATE = 2e-5
-WEIGHT_DECAY = 1e-2
+WEIGHT_DECAY = 1e-8
 RANDOM_SEED = 42
 
 # ============================ Training Settings=================================
@@ -36,9 +37,10 @@ RANDOM_SEED = 42
 DEVICE = "cuda:2"
 MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
-MAX_CHECKPOINTS = 1
+MAX_CHECKPOINTS = 0
 OUTPUT_DIR = os.path.join(
-    "models", f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}"
+    "models",
+    f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}",
 )
 
 
