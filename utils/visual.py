@@ -43,7 +43,7 @@ class VisualizationHelper:
         }
 
         fig_width = max(10, 8 + 0.4 * (len(cwe_unique) + 1))
-        plt.figure(figsize=(fig_width, 8))
+        plt.figure(figsize=(10, 8)) 
         x, y = umap_embs[:, 0], umap_embs[:, 1]
 
         if not vuln_mask.all():
@@ -69,7 +69,7 @@ class VisualizationHelper:
                     neg_center[1],
                     c="black",  # 或者 "dimgray"
                     marker="X",
-                    s=250,
+                    s=200,
                     edgecolors="white",
                     linewidths=1.5,
                     zorder=12,
@@ -94,7 +94,7 @@ class VisualizationHelper:
                     center[1],
                     c=[cwe_to_color[cwe]],
                     marker="*",
-                    s=250,
+                    s=200,
                     edgecolors="black",
                     linewidths=1.5,
                     zorder=10,
