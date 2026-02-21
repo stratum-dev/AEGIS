@@ -32,7 +32,6 @@ from utils.calc import (
     estimate_vmf_concentration,
     evaluate_etf_proximity,
     geometric_median,
-    l2_norm,
 )
 from utils.logger import log
 from utils.serialize import save_to_json
@@ -85,6 +84,7 @@ class Trainer:
             device=self.train_config.DEVICE,
         )
         self.current_psis = None
+        self.current_gamma = 0
 
         self.model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
@@ -188,9 +188,18 @@ class Trainer:
 
         omega_f = torch.tensor(omega_f_list, device=self.train_config.DEVICE)
 
+        # ===== Adaptive gamma via kappa stability =====
+        # gamma reflects reliability of kappa estimation
+        # larger variance -> rely more on concentration
+
+        kappa_std = torch.std(kappas)
+        kappa_mean = torch.mean(kappas).clamp(min=1e-6)
+        
+        gamma = (kappa_std / (kappa_std + kappa_mean)).clamp(0.0, 1.0).item()
+
         # ===== final margin =====
         for c in range(self.num_classes):
-            psi = 0.5 * omega_k[c].item() + 0.5 * omega_f[c].item()
+            psi = (gamma) * omega_k[c].item() + (1-gamma) * omega_f[c].item()
             psis.append(psi)
             margins[c] = self.model_config.M0 * psi
 
@@ -199,7 +208,8 @@ class Trainer:
             scales.detach(),
             kappas_norm.detach(),
             psis,
-        )  # ✅ 修复：margins 添加 detach()
+            gamma
+        )
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -477,6 +487,7 @@ class Trainer:
                 self.current_scales,
                 self.current_kappas_norm,
                 self.current_psis,
+                self.current_gamma
             ) = self._compute_adaptive_params(online_embeddings, online_truth_classes)
 
             train_duration = time.time() - batch_start_time
@@ -519,6 +530,7 @@ class Trainer:
                 .numpy()
             )
 
+            log.print("Gamma: ", self.current_gamma)
             log.print("Scales: ", self.current_scales)
             log.print("Margins: ", self.current_margins)
             log.print("Kappas (Norm): ", self.current_kappas_norm)
