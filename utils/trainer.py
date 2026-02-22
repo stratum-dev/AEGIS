@@ -176,7 +176,7 @@ class Trainer:
             self.train_config.DEVICE
         )
 
-        omega_k = torch.sigmoid(0.5 * kappas_norm)  # [C]
+        omega_k = 1-torch.sigmoid(0.5 * kappas_norm)  # [C]
 
         # ===== frequency-aware weight omega_n =====
         omega_f_list = []
@@ -454,10 +454,10 @@ class Trainer:
                         self.model.kappaface_head.weight.detach(), dim=1
                     )
 
-                    loss_ppc = prototype_alignment_loss(
-                        features_norm, truth_class_indices, weight_prototypes
-                    )
-
+                    # loss_ppc = prototype_alignment_loss(
+                    #     features_norm, truth_class_indices, weight_prototypes
+                    # )
+                    loss_ppc = 0
                     loss = loss_kappa + loss_ppc
 
                 self.scaler.scale(loss).backward()
