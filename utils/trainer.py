@@ -24,7 +24,7 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import prototype_alignment_loss, kappa_loss
+from utils.loss import prototype_alignment_loss, kappa_loss, soft_f1_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     compute_class_separation_index,
@@ -176,7 +176,7 @@ class Trainer:
             self.train_config.DEVICE
         )
 
-        omega_k = 1-torch.sigmoid(0.5 * kappas_norm)  # [C]
+        omega_k = 1 - torch.sigmoid(0.5 * kappas_norm)  # [C]
 
         # ===== frequency-aware weight omega_n =====
         omega_f_list = []
@@ -194,22 +194,16 @@ class Trainer:
 
         kappa_std = torch.std(kappas)
         kappa_mean = torch.mean(kappas).clamp(min=1e-6)
-        
+
         gamma = (kappa_std / (kappa_std + kappa_mean)).clamp(0.0, 1.0).item()
 
         # ===== final margin =====
         for c in range(self.num_classes):
-            psi = (gamma) * omega_k[c].item() + (1-gamma) * omega_f[c].item()
+            psi = (gamma) * omega_k[c].item() + (1 - gamma) * omega_f[c].item()
             psis.append(psi)
             margins[c] = self.model_config.M0 * psi
 
-        return (
-            margins.detach(),
-            scales.detach(),
-            kappas_norm.detach(),
-            psis,
-            gamma
-        )
+        return (margins.detach(), scales.detach(), kappas_norm.detach(), psis, gamma)
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -412,6 +406,7 @@ class Trainer:
             self.model.train()
 
             total_kappa_loss = 0.0
+            total_reg_loss = 0.0
             total_combined_loss = 0.0
 
             # ===== 新增：用于累积特征的列表 =====
@@ -449,6 +444,13 @@ class Trainer:
                     online_truth_classes.append(truth_class_indices)
                     loss_kappa = kappa_loss(logits, truth_class_indices)
 
+                    loss_ppc = soft_f1_loss(
+                        logits,
+                        truth_class_indices,
+                        reduction="macro",
+                        detach_denominator=True,
+                    )
+
                     # ===== Prototype–Prototype Consistency =====
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
@@ -457,7 +459,6 @@ class Trainer:
                     # loss_ppc = prototype_alignment_loss(
                     #     features_norm, truth_class_indices, weight_prototypes
                     # )
-                    loss_ppc = 0
                     loss = loss_kappa + loss_ppc
 
                 self.scaler.scale(loss).backward()
@@ -465,13 +466,14 @@ class Trainer:
                 self.scaler.update()
 
                 total_loss += loss.item()
+                total_reg_loss += loss_ppc.item()
                 total_kappa_loss += loss_kappa.item()
                 total_combined_loss += loss.item()
                 progress_bar.set_postfix(
                     {
                         "Loss": f"{loss.item():.4f}",
                         "Kappa": f"{loss_kappa.item():.4f}",
-                        "PPC": f"{loss_ppc.item():.4f}",
+                        "Reg": f"{loss_ppc.item():.4f}",
                     }
                 )
 
@@ -487,7 +489,7 @@ class Trainer:
                 self.current_scales,
                 self.current_kappas_norm,
                 self.current_psis,
-                self.current_gamma
+                self.current_gamma,
             ) = self._compute_adaptive_params(online_embeddings, online_truth_classes)
 
             train_duration = time.time() - batch_start_time
@@ -500,6 +502,7 @@ class Trainer:
             num_batches = len(train_loader)
             avg_train_kappa_loss = total_kappa_loss / num_batches
             avg_train_combined_loss = total_combined_loss / num_batches
+            avg_train_reg_loss = total_reg_loss / num_batches
 
             # ===== 保存当前epoch的原型（从在线编码器计算）=====
             self.train_avg_prototypes = self._compute_average_prototypes(
@@ -547,7 +550,7 @@ class Trainer:
             log.print(
                 f"Combined Loss: {avg_train_combined_loss:.4f} | "
                 f"Kappa Loss: {avg_train_kappa_loss:.4f} | "
-                f"PPC Loss: {loss_ppc.item():.4f}"
+                f"Reg Loss: {avg_train_reg_loss:.4f}"
             )
 
             log.print(
