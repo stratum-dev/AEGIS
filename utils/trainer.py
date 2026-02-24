@@ -406,7 +406,6 @@ class Trainer:
             self.model.train()
 
             total_kappa_loss = 0.0
-            total_reg_loss = 0.0
             total_combined_loss = 0.0
 
             # ===== 新增：用于累积特征的列表 =====
@@ -444,36 +443,24 @@ class Trainer:
                     online_truth_classes.append(truth_class_indices)
                     loss_kappa = kappa_loss(logits, truth_class_indices)
 
-                    loss_ppc = soft_f1_loss(
-                        logits,
-                        truth_class_indices,
-                        reduction="macro",
-                        detach_denominator=True,
-                    )
-
                     # ===== Prototype–Prototype Consistency =====
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
                     )
 
-                    # loss_ppc = prototype_alignment_loss(
-                    #     features_norm, truth_class_indices, weight_prototypes
-                    # )
-                    loss = loss_kappa + loss_ppc
+                    loss = loss_kappa
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
                 total_loss += loss.item()
-                total_reg_loss += loss_ppc.item()
                 total_kappa_loss += loss_kappa.item()
                 total_combined_loss += loss.item()
                 progress_bar.set_postfix(
                     {
                         "Loss": f"{loss.item():.4f}",
                         "Kappa": f"{loss_kappa.item():.4f}",
-                        "Reg": f"{loss_ppc.item():.4f}",
                     }
                 )
 
@@ -502,7 +489,6 @@ class Trainer:
             num_batches = len(train_loader)
             avg_train_kappa_loss = total_kappa_loss / num_batches
             avg_train_combined_loss = total_combined_loss / num_batches
-            avg_train_reg_loss = total_reg_loss / num_batches
 
             # ===== 保存当前epoch的原型（从在线编码器计算）=====
             self.train_avg_prototypes = self._compute_average_prototypes(
@@ -550,7 +536,6 @@ class Trainer:
             log.print(
                 f"Combined Loss: {avg_train_combined_loss:.4f} | "
                 f"Kappa Loss: {avg_train_kappa_loss:.4f} | "
-                f"Reg Loss: {avg_train_reg_loss:.4f}"
             )
 
             log.print(
