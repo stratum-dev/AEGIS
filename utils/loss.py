@@ -40,6 +40,7 @@ def prototype_alignment_loss(
 
     return loss
 
+
 import torch
 import torch.nn.functional as F
 

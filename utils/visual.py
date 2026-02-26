@@ -43,7 +43,7 @@ class VisualizationHelper:
         }
 
         fig_width = max(10, 8 + 0.4 * (len(cwe_unique) + 1))
-        plt.figure(figsize=(10, 8)) 
+        plt.figure(figsize=(10, 8))
         x, y = umap_embs[:, 0], umap_embs[:, 1]
 
         if not vuln_mask.all():

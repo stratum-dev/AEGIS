@@ -10,10 +10,7 @@ import torch.nn.functional as F
 from sklearn.metrics import (
     adjusted_mutual_info_score,
     adjusted_rand_score,
-    davies_bouldin_score,
     normalized_mutual_info_score,
-    calinski_harabasz_score,
-    silhouette_score,
 )
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
@@ -24,14 +21,20 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import prototype_alignment_loss, kappa_loss, soft_f1_loss
+from utils.loss import kappa_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
-    compute_class_separation_index,
-    compute_dunn_index,
+    angular_variance,
+    between_class_angular_margin,
     estimate_vmf_concentration,
     evaluate_etf_proximity,
+    geodesic_variance,
     geometric_median,
+    l2_normalize,
+    mean_resultant_length,
+    pairwise_angular_dispersion,
+    spherical_davies_bouldin,
+    spherical_silhouette_score,
 )
 from utils.logger import log
 from utils.serialize import save_to_json
@@ -240,29 +243,25 @@ class Trainer:
     def _calculate_clustering_metrics(self, embeddings, true_labels, pred_labels):
         true_labels = np.array(true_labels)
         pred_labels = np.array(pred_labels)
-        embeddings = np.array(embeddings)
+        embeddings = l2_normalize(np.array(embeddings))
 
-        ch_score = (
-            calinski_harabasz_score(embeddings, pred_labels)
-            if len(set(pred_labels)) > 1
-            else 0.0
-        )
         silhouette_avg = (
-            silhouette_score(embeddings, pred_labels)
-            if (len(set(pred_labels)) > 1 and len(set(pred_labels)) < len(embeddings))
+            spherical_silhouette_score(embeddings, pred_labels)
+            if len(set(pred_labels)) > 1
             else 0
         )
-        nmi_score = normalized_mutual_info_score(true_labels, pred_labels)
-        ami_score = adjusted_mutual_info_score(true_labels, pred_labels)
-        ari_score = adjusted_rand_score(true_labels, pred_labels)
+
         dbi_score = (
-            davies_bouldin_score(embeddings, pred_labels)
+            spherical_davies_bouldin(embeddings, pred_labels)
             if len(set(pred_labels)) > 1
             else float("inf")
         )
 
+        nmi_score = normalized_mutual_info_score(true_labels, pred_labels)
+        ami_score = adjusted_mutual_info_score(true_labels, pred_labels)
+        ari_score = adjusted_rand_score(true_labels, pred_labels)
+
         return {
-            "ch_score": ch_score,
             "silhouette_score": silhouette_avg,
             "nmi_score": nmi_score,
             "ami_score": ami_score,
@@ -324,16 +323,15 @@ class Trainer:
             [self.class_to_index[k] for k in all_truth_class_keys],
             all_pred_class_indices,
         )
+
+        mrl = mean_resultant_length(all_val_embeddings)
+        angular_var = angular_variance(all_val_embeddings)
+        pariwise_dispersion = pairwise_angular_dispersion(all_val_embeddings)
+        geodesic_var = geodesic_variance(all_val_embeddings)
+        bcm = between_class_angular_margin(all_val_embeddings, all_pred_class_indices)
+
         etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
         val_embeddings_array = np.concatenate(all_val_embeddings, axis=0)
-        dunn_score = compute_dunn_index(
-            val_embeddings_array,
-            np.array(all_pred_class_indices),
-        )
-        separation_score = compute_class_separation_index(
-            val_embeddings_array,
-            np.array([self.class_to_index[k] for k in all_truth_class_keys]),
-        )
 
         VisualizationHelper.draw_plot_umap(
             val_embeddings_array,
@@ -369,13 +367,15 @@ class Trainer:
         save_to_json(cwe_metrics, cwe_file_path)
 
         return (
-            clustering_metrics["ch_score"],
+            mrl,
+            angular_var,
+            pariwise_dispersion,
+            geodesic_var,
+            bcm,
             clustering_metrics["nmi_score"],
             clustering_metrics["ami_score"],
             clustering_metrics["ari_score"],
             clustering_metrics["dbi_score"],
-            dunn_score,
-            separation_score,
             binary_metrics,
             cwe_metrics,
             etf_status,
@@ -500,13 +500,15 @@ class Trainer:
             self.train_weight_prototypes = weight_prototypes.detach()
 
             (
-                ch_score,
+                mrl,
+                angular_var,
+                pariwise_dispersion,
+                geodesic_var,
+                bcm,
                 nmi_score,
                 ami_score,
                 ari_score,
                 dbi_score,
-                dunn_score,
-                separation_score,
                 binary_metrics,
                 cwe_metrics,
                 etf_status,
@@ -539,13 +541,15 @@ class Trainer:
             )
 
             log.print(
-                f"CH Score: {ch_score:.4f} | "
                 f"NMI: {nmi_score:.4f} | "
                 f"AMI: {ami_score:.4f} | "
                 f"ARI: {ari_score:.4f} | "
                 f"DBI: {dbi_score:.4f} | "
-                f"Dunn: {dunn_score:.4f} | "
-                f"Separation: {separation_score:.4f}"
+                f"MRL: {mrl:.4f} | "
+                f"Angular Var: {angular_var:.4f} | "
+                f"MRL: {pariwise_dispersion:.4f} | "
+                f"Geodesic Var: {geodesic_var:.4f} | "
+                f"Between Class Margin: {bcm:.4f} | "
             )
 
             log.print(
