@@ -317,9 +317,9 @@ class Trainer:
         cwe_metrics = MetricCalculator.calculate_l2_metrics(
             all_pred_class_indices, all_truth_class_keys, self.index_to_class
         )
-
+        all_val_embeddings = np.concatenate(all_val_embeddings, axis=0)
         clustering_metrics = self._calculate_clustering_metrics(
-            np.concatenate(all_val_embeddings, axis=0),
+            all_val_embeddings,
             [self.class_to_index[k] for k in all_truth_class_keys],
             all_pred_class_indices,
         )
@@ -331,10 +331,9 @@ class Trainer:
         bcm = between_class_angular_margin(all_val_embeddings, all_pred_class_indices)
 
         etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
-        val_embeddings_array = np.concatenate(all_val_embeddings, axis=0)
 
         VisualizationHelper.draw_plot_umap(
-            val_embeddings_array,
+            all_val_embeddings,
             all_truth_class_keys,
             self.train_config.UMAP_OUTPUT_DIR,
             f"{epoch}.svg",
@@ -372,10 +371,7 @@ class Trainer:
             pariwise_dispersion,
             geodesic_var,
             bcm,
-            clustering_metrics["nmi_score"],
-            clustering_metrics["ami_score"],
-            clustering_metrics["ari_score"],
-            clustering_metrics["dbi_score"],
+            clustering_metrics,
             binary_metrics,
             cwe_metrics,
             etf_status,
@@ -505,10 +501,7 @@ class Trainer:
                 pariwise_dispersion,
                 geodesic_var,
                 bcm,
-                nmi_score,
-                ami_score,
-                ari_score,
-                dbi_score,
+                clustering_metrics,
                 binary_metrics,
                 cwe_metrics,
                 etf_status,
@@ -541,15 +534,16 @@ class Trainer:
             )
 
             log.print(
-                f"NMI: {nmi_score:.4f} | "
-                f"AMI: {ami_score:.4f} | "
-                f"ARI: {ari_score:.4f} | "
-                f"DBI: {dbi_score:.4f} | "
-                f"MRL: {mrl:.4f} | "
-                f"Angular Var: {angular_var:.4f} | "
-                f"MRL: {pariwise_dispersion:.4f} | "
-                f"Geodesic Var: {geodesic_var:.4f} | "
-                f"Between Class Margin: {bcm:.4f} | "
+                f"SH: {clustering_metrics['silhouette_score']} | "
+                f"NMI: {clustering_metrics['nmi_score']} | "
+                f"AMI: {clustering_metrics['ami_score']} | "
+                f"ARI: {clustering_metrics['ari_score']} | "
+                f"DBI: {clustering_metrics['dbi_score']} | "
+                f"MRL: {mrl} | "
+                f"Angular Var: {angular_var} | "
+                f"MRL: {pariwise_dispersion} | "
+                f"Geodesic Var: {geodesic_var} | "
+                f"Between Class Margin: {bcm} | "
             )
 
             log.print(
