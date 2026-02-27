@@ -24,9 +24,9 @@ BACKBONE_REPO = "Salesforce/codet5-base"
 # The descriptions for these hyperparameters was intruduced in paper.
 # Please refer the original paper to adjust the hyperparameters
 S0 = 30
-M0 = 0.3
+M0 = 0.15
 
-BATCH_SIZE = 20
+BATCH_SIZE = 32
 LEARNING_RATE = 2e-5
 WEIGHT_DECAY = 0.01
 RANDOM_SEED = 42

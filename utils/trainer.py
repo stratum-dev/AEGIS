@@ -21,7 +21,7 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import kappa_loss
+from utils.loss import kappa_loss,prototype_alignment_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     angular_variance,
@@ -402,6 +402,7 @@ class Trainer:
             self.model.train()
 
             total_kappa_loss = 0.0
+            total_reg_loss = 0.0
             total_combined_loss = 0.0
 
             # ===== 新增：用于累积特征的列表 =====
@@ -443,20 +444,24 @@ class Trainer:
                     weight_prototypes = F.normalize(
                         self.model.kappaface_head.weight.detach(), dim=1
                     )
-
-                    loss = loss_kappa
+                    loss_reg = prototype_alignment_loss(
+                         features_norm, truth_class_indices, weight_prototypes
+                    )
+                    loss = loss_kappa + loss_reg
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
                 total_loss += loss.item()
+                total_reg_loss += loss_reg.item()
                 total_kappa_loss += loss_kappa.item()
                 total_combined_loss += loss.item()
                 progress_bar.set_postfix(
                     {
                         "Loss": f"{loss.item():.4f}",
                         "Kappa": f"{loss_kappa.item():.4f}",
+                        "Reg": f"{loss_reg.item():.4f}",
                     }
                 )
 
@@ -485,6 +490,7 @@ class Trainer:
             num_batches = len(train_loader)
             avg_train_kappa_loss = total_kappa_loss / num_batches
             avg_train_combined_loss = total_combined_loss / num_batches
+            avg_train_reg_loss = total_reg_loss / num_batches
 
             # ===== 保存当前epoch的原型（从在线编码器计算）=====
             self.train_avg_prototypes = self._compute_average_prototypes(
@@ -531,6 +537,7 @@ class Trainer:
             log.print(
                 f"Combined Loss: {avg_train_combined_loss:.4f} | "
                 f"Kappa Loss: {avg_train_kappa_loss:.4f} | "
+                f"Reg Loss: {avg_train_reg_loss:.4f}"
             )
 
             log.print(
@@ -541,7 +548,7 @@ class Trainer:
                 f"DBI: {clustering_metrics['dbi_score']} | "
                 f"MRL: {mrl} | "
                 f"Angular Var: {angular_var} | "
-                f"MRL: {pariwise_dispersion} | "
+                f"Pairwise Disperation: {pariwise_dispersion} | "
                 f"Geodesic Var: {geodesic_var} | "
                 f"Between Class Margin: {bcm} | "
             )
