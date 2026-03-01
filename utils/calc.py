@@ -265,6 +265,8 @@ def between_class_angular_margin(X, y):
         mean_margin (radians)
     """
     classes = np.unique(y)
+    if len(classes) == 0:
+        return 0.0, 0.0 
     centroids = []
 
     for c in classes:

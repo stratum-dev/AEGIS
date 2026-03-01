@@ -288,7 +288,7 @@ class Trainer:
             self.model.kappaface_head.weight.detach(), dim=1
         )
 
-        with autocast(device_type="cuda"):
+        with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Evaluating val at epoch {epoch}"):
                 input_ids = batch["input_ids"].to(self.train_config.DEVICE)
                 attention_mask = batch["attention_mask"].to(self.train_config.DEVICE)
@@ -323,7 +323,7 @@ class Trainer:
                 total_val_reg_loss += val_loss_reg.item()
                 num_val_batches += 1
 
-                all_val_embeddings.append(embs.cpu().numpy())
+                all_val_embeddings.append(embs.detach().cpu().numpy())
 
                 pred_class_indices = MetricCalculator.hierarchical_decision(
                     embs,
@@ -466,8 +466,8 @@ class Trainer:
 
                 num_samples_in_epoch += batch_size
 
-                # ===== 原有训练逻辑保持不变 =====
                 self.optimizer.zero_grad()
+                
                 with autocast(device_type="cuda"):
                     features_norm, logits = self.model(
                         input_ids,
@@ -476,8 +476,12 @@ class Trainer:
                         self.current_scales.detach(),
                         self.current_margins.detach(),
                     )
+                    
+                    # ✅【关键修复】立即 detach 并移至 CPU，防止显存泄漏
+                    # 这样 GPU 显存会在下一个 batch 开始时被复用
                     online_embeddings.append(features_norm.detach().cpu())
                     online_truth_classes.append(truth_class_indices.detach().cpu())
+                    
                     loss_kappa = kappa_loss(logits, truth_class_indices)
 
                     # ===== Prototype–Prototype Consistency =====
@@ -506,12 +510,13 @@ class Trainer:
                 )
 
             # ===== 新增：epoch结束后统一计算自适应参数（供下一epoch使用）=====
-            online_embeddings = torch.cat(online_embeddings, dim=0).to(
-                self.train_config.DEVICE
-            )
-            online_truth_classes = torch.cat(online_truth_classes, dim=0).to(
-                self.train_config.DEVICE
-            )
+            
+            # ✅【关键修复】将 CPU 上的列表 concat，然后移回 GPU
+            # 此时在线 embeddings 已经在 CPU 上了，concat 很快，然后再传到 GPU
+            online_embeddings = torch.cat(online_embeddings, dim=0).to(self.train_config.DEVICE)
+            online_truth_classes = torch.cat(
+                online_truth_classes, dim=0
+            ).to(self.train_config.DEVICE)
 
             # 基于在线特征计算自适应参数
             (
@@ -521,6 +526,8 @@ class Trainer:
                 self.current_psis,
                 self.current_gamma,
             ) = self._compute_adaptive_params(online_embeddings, online_truth_classes)
+            
+            # ... 后续代码保持不变 ...
 
             train_duration = time.time() - batch_start_time
             avg_sample_time_ms = (
@@ -593,9 +600,9 @@ class Trainer:
                 f"DBI: {clustering_metrics['dbi_score']} | "
                 f"MRL: {mrl} | "
                 f"Angular Var: {angular_var} | "
-                f"Pairwise Disperation: {pariwise_dispersion} | "
+                f"Pairwise Disperation (mean,std): {pariwise_dispersion} | "
                 f"Geodesic Var: {geodesic_var} | "
-                f"Between Class Margin: {bcm} | "
+                f"Between Class Margin (min,mean): {bcm} | "
             )
 
             log.print(
@@ -623,45 +630,78 @@ class Trainer:
                 f"HierAcc: {cwe_metrics['hier_acc']:.4f}"
             )
 
+            # ... (前文计算 metrics 代码不变)
+
             new_point = {
                 "epoch": epoch,
                 "binary_f1": binary_metrics["f1"],
                 "macro_f1": cwe_metrics["macro"]["f1"],
             }
-            self.all_points.append(new_point)
-
-            dominated = False
-            for p in self.all_points:
-                if p is not new_point and self._is_dominated(new_point, p):
-                    dominated = True
+            
+            # 1. 只检查是否被当前的 Pareto Front 支配
+            # 不需要遍历 self.all_points (历史所有点)，只需遍历当前的最优解集
+            is_dominated_by_front = False
+            epsilon = 1e-6 # 防止浮点数噪声
+            
+            for p in self.pareto_front:
+                if self._is_dominated(new_point, p):
+                    is_dominated_by_front = True
                     break
-
-            if not dominated:
-                self.pareto_front = [
-                    p for p in self.pareto_front if not self._dominates(new_point, p)
-                ]
-                self.pareto_front.append(new_point)
-                save_checkpoint_with_limit(
-                    model=self.model,
-                    avg_proto=self.train_avg_prototypes,
-                    geo_proto=self.train_geo_prototypes,
-                    weight_proto=self.train_weight_prototypes,
-                    class_to_idx=self.class_to_index,
-                    model_config=self.model_config,
-                    idx_to_class=self.index_to_class,
-                    epoch=epoch,
-                    output_dir=self.train_config.OUTPUT_DIR,
-                    max_checkpoints=self.train_config.MAX_CHECKPOINTS,
-                )
-                log.print(
-                    f"✅ New Pareto solution! Binary F1: {binary_metrics['f1']}, Macro F1: {cwe_metrics['macro']['f1']}"
-                )
-                self.pareto_patience_counter = 0
+            
+            # 2. 如果未被当前前沿支配，则尝试加入
+            if not is_dominated_by_front:
+                # 在加入前，移除 front 中被新点支配的旧点
+                # 注意：这里要创建一个新的列表，避免在遍历中修改列表
+                new_pareto_front = []
+                removed_count = 0
+                
+                for p in self.pareto_front:
+                    # 如果旧点 p 被新点 new_point 支配，则丢弃 p
+                    if self._dominates(new_point, p):
+                        removed_count += 1
+                    else:
+                        # 检查是否重复（数值极其接近的点视为相同，避免无限微调导致的震荡）
+                        if (abs(p["binary_f1"] - new_point["binary_f1"]) < epsilon and 
+                            abs(p["macro_f1"] - new_point["macro_f1"]) < epsilon):
+                            # 视为已存在，不添加新点，也不重置耐心值（或者视作无进步）
+                            # 这里选择直接跳过，不视为新解
+                            is_dominated_by_front = True # 标记为无需处理
+                        else:
+                            new_pareto_front.append(p)
+                
+                if not is_dominated_by_front:
+                    new_pareto_front.append(new_point)
+                    self.pareto_front = new_pareto_front
+                    
+                    # 只有当真正更新了 front (要么是纯新增，要么替换了旧点) 才算进步
+                    # 这里的逻辑是：只要进入了 front，就算一次“发现”，重置早停
+                    save_checkpoint_with_limit(
+                        model=self.model,
+                        avg_proto=self.train_avg_prototypes,
+                        geo_proto=self.train_geo_prototypes,
+                        weight_proto=self.train_weight_prototypes,
+                        class_to_idx=self.class_to_index,
+                        model_config=self.model_config,
+                        idx_to_class=self.index_to_class,
+                        epoch=epoch,
+                        output_dir=self.train_config.OUTPUT_DIR,
+                        max_checkpoints=self.train_config.MAX_CHECKPOINTS,
+                    )
+                    log.print(
+                        f"✅ New Pareto solution added! (Front size: {len(self.pareto_front)}) "
+                        f"Binary F1: {binary_metrics['f1']:.4f}, Macro F1: {cwe_metrics['macro']['f1']:.4f}"
+                    )
+                    self.pareto_patience_counter = 0
+                else:
+                    # 这种情况是发现了一个与现有 front 点数值几乎一样的点
+                    self.pareto_patience_counter += 1
+                    log.print(f"⚠️ Duplicate solution found. Patience: {self.pareto_patience_counter}")
             else:
                 self.pareto_patience_counter += 1
                 log.print(
-                    f"⚠️ Dominated solution. Pareto patience: {self.pareto_patience_counter}/{self.train_config.EARLY_STOP_PATIENCE}"
+                    f"⚠️ Dominated by current front. Pareto patience: {self.pareto_patience_counter}/{self.train_config.EARLY_STOP_PATIENCE}"
                 )
+
             log.print(
                 f"⏱️ Epoch Training Time: {epoch_duration:.2f}s | "
                 f"Average Training Time in Epoch: {avg_sample_time_ms:.2f}ms"
