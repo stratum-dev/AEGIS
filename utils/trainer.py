@@ -425,6 +425,13 @@ class Trainer:
             collate_fn=custom_collate_fn,
         )
 
+        # ✅ 早停相关初始化 (基于 Validation Loss)
+        best_val_combined_loss = float("inf")
+        patience_counter = 0
+
+        # 如果需要保存最佳模型，可以在这里定义路径或逻辑
+        # best_model_path = os.path.join(self.train_config.OUTPUT_DIR, "best_model.pth")
+
         for epoch in range(self.start_epoch, self.train_config.MAX_EPOCHES):
             g = torch.Generator()
             g.manual_seed(self.model_config.RANDOM_SEED)
@@ -452,7 +459,7 @@ class Trainer:
             total_loss = 0.0
             num_samples_in_epoch = 0
             progress_bar = tqdm(train_loader, desc="Training")
-            batch_start_time = time.time()
+            batch_start_time = time.time()  # 用于计算整个 epoch 的时间，包括所有 batch
 
             # ===== 合并为单次遍历：同时提取特征和训练 =====
             for batch in progress_bar:
@@ -467,7 +474,7 @@ class Trainer:
                 num_samples_in_epoch += batch_size
 
                 self.optimizer.zero_grad()
-                
+
                 with autocast(device_type="cuda"):
                     features_norm, logits = self.model(
                         input_ids,
@@ -476,12 +483,11 @@ class Trainer:
                         self.current_scales.detach(),
                         self.current_margins.detach(),
                     )
-                    
+
                     # ✅【关键修复】立即 detach 并移至 CPU，防止显存泄漏
-                    # 这样 GPU 显存会在下一个 batch 开始时被复用
                     online_embeddings.append(features_norm.detach().cpu())
                     online_truth_classes.append(truth_class_indices.detach().cpu())
-                    
+
                     loss_kappa = kappa_loss(logits, truth_class_indices)
 
                     # ===== Prototype–Prototype Consistency =====
@@ -509,27 +515,39 @@ class Trainer:
                     }
                 )
 
-            # ===== 新增：epoch结束后统一计算自适应参数（供下一epoch使用）=====
-            
+            # ===== Epoch 结束后统一计算自适应参数（供下一 epoch 使用）=====
+
             # ✅【关键修复】将 CPU 上的列表 concat，然后移回 GPU
-            # 此时在线 embeddings 已经在 CPU 上了，concat 很快，然后再传到 GPU
-            online_embeddings = torch.cat(online_embeddings, dim=0).to(self.train_config.DEVICE)
-            online_truth_classes = torch.cat(
-                online_truth_classes, dim=0
-            ).to(self.train_config.DEVICE)
+            if len(online_embeddings) > 0:
+                online_embeddings = torch.cat(online_embeddings, dim=0).to(
+                    self.train_config.DEVICE
+                )
+                online_truth_classes = torch.cat(online_truth_classes, dim=0).to(
+                    self.train_config.DEVICE
+                )
 
-            # 基于在线特征计算自适应参数
-            (
-                self.current_margins,
-                self.current_scales,
-                self.current_kappas_norm,
-                self.current_psis,
-                self.current_gamma,
-            ) = self._compute_adaptive_params(online_embeddings, online_truth_classes)
-            
-            # ... 后续代码保持不变 ...
+                # 基于在线特征计算自适应参数
+                (
+                    self.current_margins,
+                    self.current_scales,
+                    self.current_kappas_norm,
+                    self.current_psis,
+                    self.current_gamma,
+                ) = self._compute_adaptive_params(
+                    online_embeddings, online_truth_classes
+                )
+            else:
+                log.print(
+                    "⚠️ No data processed in this epoch. Skipping adaptive param update."
+                )
 
-            train_duration = time.time() - batch_start_time
+            train_duration = (
+                time.time() - batch_start_time
+            )  # 注意：这里 batch_start_time 是在第一个 batch 前记录的
+            # 更准确的 epoch 训练时间应该是 time.time() - epoch_start_time，但原代码似乎想用 batch_start_time 算平均？
+            # 这里我们沿用原代码的逻辑，但注意 batch_start_time 是在 loop 前定义的，所以 train_duration 近似等于 epoch 训练时间
+            # 如果要精确计算平均每个 sample 的时间，用 epoch_duration / num_samples_in_epoch 更好
+
             avg_sample_time_ms = (
                 (train_duration / num_samples_in_epoch) * 1000
                 if num_samples_in_epoch > 0
@@ -537,17 +555,25 @@ class Trainer:
             )
             epoch_duration = time.time() - epoch_start_time
             num_batches = len(train_loader)
-            avg_train_kappa_loss = total_kappa_loss / num_batches
-            avg_train_combined_loss = total_combined_loss / num_batches
-            avg_train_reg_loss = total_reg_loss / num_batches
 
-            # ===== 保存当前epoch的原型（从在线编码器计算）=====
-            self.train_avg_prototypes = self._compute_average_prototypes(
-                online_embeddings, online_truth_classes
-            ).detach()
-            self.train_geo_prototypes = self._compute_geometric_prototypes(
-                online_embeddings, online_truth_classes
-            ).detach()
+            # 避免除以零
+            if num_batches > 0:
+                avg_train_kappa_loss = total_kappa_loss / num_batches
+                avg_train_combined_loss = total_combined_loss / num_batches
+                avg_train_reg_loss = total_reg_loss / num_batches
+            else:
+                avg_train_kappa_loss = avg_train_combined_loss = avg_train_reg_loss = (
+                    0.0
+                )
+
+            # ===== 保存当前 epoch 的原型（从在线编码器计算）=====
+            if len(online_embeddings) > 0:
+                self.train_avg_prototypes = self._compute_average_prototypes(
+                    online_embeddings, online_truth_classes
+                ).detach()
+                self.train_geo_prototypes = self._compute_geometric_prototypes(
+                    online_embeddings, online_truth_classes
+                ).detach()
             self.train_weight_prototypes = F.normalize(
                 self.model.kappaface_head.weight.detach(), dim=1
             )
@@ -571,7 +597,8 @@ class Trainer:
             log.print("Scales: ", self.current_scales)
             log.print("Margins: ", self.current_margins)
             log.print("Kappas (Norm): ", self.current_kappas_norm)
-            log.print("Psis: ", [f"{x:.4f}" for x in self.current_psis])
+            if self.current_psis is not None:
+                log.print("Psis: ", [f"{x:.4f}" for x in self.current_psis])
 
             log.print(
                 f"Norm Score:{etf_status['norm_std']:.4f} | "
@@ -630,81 +657,44 @@ class Trainer:
                 f"HierAcc: {cwe_metrics['hier_acc']:.4f}"
             )
 
-            # ... (前文计算 metrics 代码不变)
+            # ==================== ✅ 修改后的早停逻辑 (基于 Validation Combined Loss) ====================
 
-            new_point = {
-                "epoch": epoch,
-                "binary_f1": binary_metrics["f1"],
-                "macro_f1": cwe_metrics["macro"]["f1"],
-            }
-            
-            # 1. 只检查是否被当前的 Pareto Front 支配
-            # 不需要遍历 self.all_points (历史所有点)，只需遍历当前的最优解集
-            is_dominated_by_front = False
-            epsilon = 1e-6 # 防止浮点数噪声
-            
-            for p in self.pareto_front:
-                if self._is_dominated(new_point, p):
-                    is_dominated_by_front = True
-                    break
-            
-            # 2. 如果未被当前前沿支配，则尝试加入
-            if not is_dominated_by_front:
-                # 在加入前，移除 front 中被新点支配的旧点
-                # 注意：这里要创建一个新的列表，避免在遍历中修改列表
-                new_pareto_front = []
-                removed_count = 0
-                
-                for p in self.pareto_front:
-                    # 如果旧点 p 被新点 new_point 支配，则丢弃 p
-                    if self._dominates(new_point, p):
-                        removed_count += 1
-                    else:
-                        # 检查是否重复（数值极其接近的点视为相同，避免无限微调导致的震荡）
-                        if (abs(p["binary_f1"] - new_point["binary_f1"]) < epsilon and 
-                            abs(p["macro_f1"] - new_point["macro_f1"]) < epsilon):
-                            # 视为已存在，不添加新点，也不重置耐心值（或者视作无进步）
-                            # 这里选择直接跳过，不视为新解
-                            is_dominated_by_front = True # 标记为无需处理
-                        else:
-                            new_pareto_front.append(p)
-                
-                if not is_dominated_by_front:
-                    new_pareto_front.append(new_point)
-                    self.pareto_front = new_pareto_front
-                    
-                    # 只有当真正更新了 front (要么是纯新增，要么替换了旧点) 才算进步
-                    # 这里的逻辑是：只要进入了 front，就算一次“发现”，重置早停
-                    save_checkpoint_with_limit(
-                        model=self.model,
-                        avg_proto=self.train_avg_prototypes,
-                        geo_proto=self.train_geo_prototypes,
-                        weight_proto=self.train_weight_prototypes,
-                        class_to_idx=self.class_to_index,
-                        model_config=self.model_config,
-                        idx_to_class=self.index_to_class,
-                        epoch=epoch,
-                        output_dir=self.train_config.OUTPUT_DIR,
-                        max_checkpoints=self.train_config.MAX_CHECKPOINTS,
-                    )
-                    log.print(
-                        f"✅ New Pareto solution added! (Front size: {len(self.pareto_front)}) "
-                        f"Binary F1: {binary_metrics['f1']:.4f}, Macro F1: {cwe_metrics['macro']['f1']:.4f}"
-                    )
-                    self.pareto_patience_counter = 0
-                else:
-                    # 这种情况是发现了一个与现有 front 点数值几乎一样的点
-                    self.pareto_patience_counter += 1
-                    log.print(f"⚠️ Duplicate solution found. Patience: {self.pareto_patience_counter}")
-            else:
-                self.pareto_patience_counter += 1
+            # 检查当前验证集损失是否有改进
+            if avg_combined_val_loss < best_val_combined_loss:
+                best_val_combined_loss = avg_combined_val_loss
+                patience_counter = 0  # 重置耐心计数器
+
                 log.print(
-                    f"⚠️ Dominated by current front. Pareto patience: {self.pareto_patience_counter}/{self.train_config.EARLY_STOP_PATIENCE}"
+                    f"✨ Validation loss improved to {best_val_combined_loss:.4f}. Resetting patience counter."
+                )
+
+                # ✅ 在验证集损失最低时保存最佳模型 checkpoint
+                save_checkpoint_with_limit(
+                    model=self.model,
+                    avg_proto=self.train_avg_prototypes,
+                    geo_proto=self.train_geo_prototypes,
+                    weight_proto=self.train_weight_prototypes,
+                    class_to_idx=self.class_to_index,
+                    model_config=self.model_config,
+                    idx_to_class=self.index_to_class,
+                    epoch=epoch,
+                    output_dir=self.train_config.OUTPUT_DIR,
+                    max_checkpoints=self.train_config.MAX_CHECKPOINTS,
+                )
+                log.print(
+                    f"💾 Best model saved at epoch {epoch} with val loss {best_val_combined_loss:.4f}"
+                )
+            else:
+                patience_counter += 1
+                log.print(
+                    f"⚠️ Validation loss did not improve significantly. "
+                    f"Current: {avg_combined_val_loss:.4f}, Best: {best_val_combined_loss:.4f}. "
+                    f"Patience: {patience_counter}/{self.train_config.EARLY_STOP_PATIENCE}"
                 )
 
             log.print(
                 f"⏱️ Epoch Training Time: {epoch_duration:.2f}s | "
-                f"Average Training Time in Epoch: {avg_sample_time_ms:.2f}ms"
+                f"Average Training Time per Sample: {avg_sample_time_ms:.2f}ms"
             )
             log.print(
                 f"Epoch {epoch} Finished at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
@@ -712,12 +702,12 @@ class Trainer:
 
             if epoch >= self.train_config.MAX_EPOCHES - 1:
                 log.print(
-                    f"🛑 Stopping triggered after reaching max epoches: {self.train_config.MAX_EPOCHES}."
+                    f"🛑 Stopping triggered after reaching max epochs: {self.train_config.MAX_EPOCHES}."
                 )
                 break
 
-            if self.pareto_patience_counter >= self.train_config.EARLY_STOP_PATIENCE:
+            if patience_counter >= self.train_config.EARLY_STOP_PATIENCE:
                 log.print(
-                    f"🛑 Pareto early stopping triggered after {self.train_config.EARLY_STOP_PATIENCE} epochs without new non-dominated solution."
+                    f"🛑 Early stopping triggered after {patience_counter} epochs without significant validation loss improvement."
                 )
                 break
