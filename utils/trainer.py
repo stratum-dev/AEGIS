@@ -1,5 +1,4 @@
 from datetime import datetime
-import json
 import os
 import time
 import warnings
@@ -21,7 +20,7 @@ from utils.metrics import MetricCalculator
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import kappa_loss,prototype_alignment_loss
+from utils.loss import kappa_loss, prototype_alignment_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
     angular_variance,
@@ -195,11 +194,11 @@ class Trainer:
         # gamma reflects reliability of kappa estimation
         # larger variance -> rely more on concentration
 
-        kappa_std = torch.std(kappas)
-        kappa_mean = torch.mean(kappas).clamp(min=1e-6)
+        # kappa_std = torch.std(kappas)
+        # kappa_mean = torch.mean(kappas).clamp(min=1e-6)
 
-        gamma = (kappa_std / (kappa_std + kappa_mean)).clamp(0.0, 1.0).item()
-
+        # gamma = (kappa_std / (kappa_std + kappa_mean)).clamp(0.0, 1.0).item()
+        gamma = 0.5
         # ===== final margin =====
         for c in range(self.num_classes):
             psi = (gamma) * omega_k[c].item() + (1 - gamma) * omega_f[c].item()
@@ -274,11 +273,22 @@ class Trainer:
         all_truth_labels = []
         all_truth_class_keys = []
         all_val_embeddings = []
+
+        # ✅ 新增：用于记录验证集损失
+        total_val_loss = 0.0
+        total_val_kappa_loss = 0.0
+        total_val_reg_loss = 0.0
         num_val_batches = 0
 
         self.model.eval()
 
-        with torch.no_grad():
+        # 获取当前的权重原型用于计算正则化损失 (与训练时保持一致)
+        # 注意：这里使用 detach() 因为验证时不更新权重
+        weight_prototypes = F.normalize(
+            self.model.kappaface_head.weight.detach(), dim=1
+        )
+
+        with autocast(device_type="cuda"):
             for batch in tqdm(val_loader, desc=f"Evaluating val at epoch {epoch}"):
                 input_ids = batch["input_ids"].to(self.train_config.DEVICE)
                 attention_mask = batch["attention_mask"].to(self.train_config.DEVICE)
@@ -288,6 +298,7 @@ class Trainer:
                     device=self.train_config.DEVICE,
                 )
 
+                # ✅ 前向传播 (保持与训练时相同的参数传递)
                 embs, logits = self.model(
                     input_ids,
                     attention_mask,
@@ -295,16 +306,40 @@ class Trainer:
                     scales=self.current_scales,
                     margins=self.current_margins,
                 )
-                all_val_embeddings.append(embs.cpu().numpy())
+
+                # ✅ 计算验证集损失
+                # 注意：验证时通常不需要 autocast，或者即使需要也不影响 no_grad 下的计算
+                # 为了数值稳定性，我们直接计算 float32 下的 loss，或者如果显存紧张也可以包一层 autocast
+                # 这里为了简单和准确，直接在 no_grad 下计算
+                val_loss_kappa = kappa_loss(logits, truth_class_indices)
+                val_loss_reg = prototype_alignment_loss(
+                    embs, truth_class_indices, weight_prototypes
+                )
+                val_loss = val_loss_kappa + val_loss_reg
+
+                # 累加损失 (item() 获取标量值)
+                total_val_loss += val_loss.item()
+                total_val_kappa_loss += val_loss_kappa.item()
+                total_val_reg_loss += val_loss_reg.item()
                 num_val_batches += 1
+
+                all_val_embeddings.append(embs.cpu().numpy())
 
                 pred_class_indices = MetricCalculator.hierarchical_decision(
                     embs,
-                    self.train_geo_prototypes,
+                    self.train_weight_prototypes,
                 )
                 all_pred_class_indices.extend(pred_class_indices)
                 all_truth_labels.extend(batch["label"])
                 all_truth_class_keys.extend(truth_class_keys)
+
+        # ✅ 计算平均损失
+        if num_val_batches > 0:
+            avg_val_loss = total_val_loss / num_val_batches
+            avg_val_kappa_loss = total_val_kappa_loss / num_val_batches
+            avg_val_reg_loss = total_val_reg_loss / num_val_batches
+        else:
+            avg_val_loss = avg_val_kappa_loss = avg_val_reg_loss = 0.0
 
         truth_binary = np.array(all_truth_labels)
         pred_binary = np.array(
@@ -332,6 +367,7 @@ class Trainer:
 
         etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
 
+        # 可视化部分保持不变
         VisualizationHelper.draw_plot_umap(
             all_val_embeddings,
             all_truth_class_keys,
@@ -365,7 +401,11 @@ class Trainer:
         save_to_json(binary_metrics, binary_file_path)
         save_to_json(cwe_metrics, cwe_file_path)
 
+        # ✅ 返回新增的损失值
         return (
+            avg_val_loss,
+            avg_val_kappa_loss,
+            avg_val_reg_loss,
             mrl,
             angular_var,
             pariwise_dispersion,
@@ -436,8 +476,8 @@ class Trainer:
                         self.current_scales.detach(),
                         self.current_margins.detach(),
                     )
-                    online_embeddings.append(features_norm)
-                    online_truth_classes.append(truth_class_indices)
+                    online_embeddings.append(features_norm.detach().cpu())
+                    online_truth_classes.append(truth_class_indices.detach().cpu())
                     loss_kappa = kappa_loss(logits, truth_class_indices)
 
                     # ===== Prototype–Prototype Consistency =====
@@ -445,7 +485,7 @@ class Trainer:
                         self.model.kappaface_head.weight.detach(), dim=1
                     )
                     loss_reg = prototype_alignment_loss(
-                         features_norm, truth_class_indices, weight_prototypes
+                        features_norm, truth_class_indices, weight_prototypes
                     )
                     loss = loss_kappa + loss_reg
 
@@ -466,10 +506,12 @@ class Trainer:
                 )
 
             # ===== 新增：epoch结束后统一计算自适应参数（供下一epoch使用）=====
-            online_embeddings = torch.cat(online_embeddings, dim=0)
-            online_truth_classes = torch.cat(
-                online_truth_classes, dim=0
-            )  # ✅ 修复：改用 torch.cat()
+            online_embeddings = torch.cat(online_embeddings, dim=0).to(
+                self.train_config.DEVICE
+            )
+            online_truth_classes = torch.cat(online_truth_classes, dim=0).to(
+                self.train_config.DEVICE
+            )
 
             # 基于在线特征计算自适应参数
             (
@@ -499,9 +541,14 @@ class Trainer:
             self.train_geo_prototypes = self._compute_geometric_prototypes(
                 online_embeddings, online_truth_classes
             ).detach()
-            self.train_weight_prototypes = weight_prototypes.detach()
+            self.train_weight_prototypes = F.normalize(
+                self.model.kappaface_head.weight.detach(), dim=1
+            )
 
             (
+                avg_combined_val_loss,
+                avg_val_kappa_loss,
+                avg_val_reg_loss,
                 mrl,
                 angular_var,
                 pariwise_dispersion,
@@ -512,13 +559,6 @@ class Trainer:
                 cwe_metrics,
                 etf_status,
             ) = self._evaluate_epoch(val_loader, epoch)
-
-            weights = (
-                torch.softmax(self.model.encoder.layer_weights, dim=0)
-                .detach()
-                .cpu()
-                .numpy()
-            )
 
             log.print("Gamma: ", self.current_gamma)
             log.print("Scales: ", self.current_scales)
@@ -535,9 +575,14 @@ class Trainer:
             )
 
             log.print(
-                f"Combined Loss: {avg_train_combined_loss:.4f} | "
-                f"Kappa Loss: {avg_train_kappa_loss:.4f} | "
-                f"Reg Loss: {avg_train_reg_loss:.4f}"
+                f"[TRAIN LOSS] Combined: {avg_train_combined_loss:.4f} | "
+                f"Kappa: {avg_train_kappa_loss:.4f} | "
+                f"Reg: {avg_train_reg_loss:.4f}"
+            )
+            log.print(
+                f"[VAL LOSS] Combined: {avg_combined_val_loss:.4f} | "
+                f"Kappa: {avg_val_kappa_loss:.4f} | "
+                f"Reg: {avg_val_reg_loss:.4f}"
             )
 
             log.print(
@@ -577,7 +622,6 @@ class Trainer:
                 f"Macro Precision: {cwe_metrics['macro']['precision']:.4f} | "
                 f"HierAcc: {cwe_metrics['hier_acc']:.4f}"
             )
-            log.print(f"Layer fusion weights: {dict(zip((8,9,10,11), weights))}")
 
             new_point = {
                 "epoch": epoch,

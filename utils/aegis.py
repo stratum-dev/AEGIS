@@ -109,7 +109,7 @@ class AEGISModel(nn.Module):
         m0,
     ):
         super().__init__()
-        self.encoder = RoBERTaEncoder(model_name, (8, 9, 10, 11))
+        self.encoder = RoBERTaEncoder(model_name, (11,))
         self.feature_dim = self.encoder.feature_dim
         self.kappaface_head = KappaLossClassifierHead(
             self.encoder.feature_dim, num_classes, s, m0
