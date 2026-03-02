@@ -27,7 +27,7 @@ class _Logger:
                 f"[Logger WARNING] Failed to open log file '{self._log_file}': {e}\n"
             )
 
-    def print(self, *args, sep=" ", end="\n", flush=False):
+    def print(self, *args, sep="", end="\n", flush=False):
         message = sep.join(str(arg) for arg in args) + end
         self._write(message, flush)
 
