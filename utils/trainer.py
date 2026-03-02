@@ -34,6 +34,7 @@ from utils.calc import (
     pairwise_angular_dispersion,
     spherical_davies_bouldin,
     spherical_silhouette_score,
+    prototype_alignment,
 )
 from utils.logger import log
 from utils.serialize import save_to_json
@@ -85,7 +86,11 @@ class Trainer:
             0,
             device=self.train_config.DEVICE,
         )
-        self.current_psis = None
+        self.current_psis = torch.full(
+            (self.num_classes,),
+            0,
+            device=self.train_config.DEVICE,
+        )
         self.current_gamma = 0
 
         self.model: AEGISModel = AEGISModel(
@@ -270,6 +275,7 @@ class Trainer:
 
     def _evaluate_epoch(self, val_loader, epoch):
         all_pred_class_indices = []
+        all_truth_class_indices = []
         all_truth_labels = []
         all_truth_class_keys = []
         all_val_embeddings = []
@@ -306,11 +312,6 @@ class Trainer:
                     scales=self.current_scales,
                     margins=self.current_margins,
                 )
-
-                # ✅ 计算验证集损失
-                # 注意：验证时通常不需要 autocast，或者即使需要也不影响 no_grad 下的计算
-                # 为了数值稳定性，我们直接计算 float32 下的 loss，或者如果显存紧张也可以包一层 autocast
-                # 这里为了简单和准确，直接在 no_grad 下计算
                 val_loss_kappa = kappa_loss(logits, truth_class_indices)
                 val_loss_reg = prototype_alignment_loss(
                     embs, truth_class_indices, weight_prototypes
@@ -327,9 +328,10 @@ class Trainer:
 
                 pred_class_indices = MetricCalculator.hierarchical_decision(
                     embs,
-                    self.train_weight_prototypes,
+                    self.train_geo_prototypes,
                 )
                 all_pred_class_indices.extend(pred_class_indices)
+                all_truth_class_indices.extend(truth_class_indices)
                 all_truth_labels.extend(batch["label"])
                 all_truth_class_keys.extend(truth_class_keys)
 
@@ -359,11 +361,25 @@ class Trainer:
             all_pred_class_indices,
         )
 
-        mrl = mean_resultant_length(all_val_embeddings)
-        angular_var = angular_variance(all_val_embeddings)
-        pariwise_dispersion = pairwise_angular_dispersion(all_val_embeddings)
-        geodesic_var = geodesic_variance(all_val_embeddings)
-        bcm = between_class_angular_margin(all_val_embeddings, all_pred_class_indices)
+        geo_prototype_mrl = mean_resultant_length(
+            self.train_geo_prototypes.cpu().numpy()
+        )
+        geo_prototype_angular_var = angular_variance(
+            self.train_geo_prototypes.cpu().numpy()
+        )
+        geo_prototype_pariwise_dispersion = pairwise_angular_dispersion(
+            self.train_geo_prototypes.cpu().numpy()
+        )
+        geo_prototype_geodesic_variance = geodesic_variance(
+            self.train_geo_prototypes.cpu().numpy()
+        )
+        geo_protptype_bcm = between_class_angular_margin(
+            self.train_geo_prototypes.cpu().numpy()
+        )
+        geo_weight_protptype_alignment = prototype_alignment(
+            self.train_geo_prototypes.cpu().numpy(),
+            self.train_weight_prototypes.cpu().numpy(),
+        )
 
         etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
 
@@ -406,11 +422,12 @@ class Trainer:
             avg_val_loss,
             avg_val_kappa_loss,
             avg_val_reg_loss,
-            mrl,
-            angular_var,
-            pariwise_dispersion,
-            geodesic_var,
-            bcm,
+            geo_prototype_mrl,
+            geo_prototype_angular_var,
+            geo_prototype_pariwise_dispersion,
+            geo_prototype_geodesic_variance,
+            geo_protptype_bcm,
+            geo_weight_protptype_alignment,
             clustering_metrics,
             binary_metrics,
             cwe_metrics,
@@ -582,25 +599,29 @@ class Trainer:
                 avg_combined_val_loss,
                 avg_val_kappa_loss,
                 avg_val_reg_loss,
-                mrl,
-                angular_var,
-                pariwise_dispersion,
-                geodesic_var,
-                bcm,
+                geo_prototype_mrl,
+                geo_prototype_angular_var,
+                geo_prototype_pariwise_dispersion,
+                geo_prototype_geodesic_var,
+                geo_prototype_bcm,
+                geo_weight_protptype_alignment,
                 clustering_metrics,
                 binary_metrics,
                 cwe_metrics,
                 etf_status,
             ) = self._evaluate_epoch(val_loader, epoch)
 
-            log.print("Gamma: ", self.current_gamma)
-            log.print("Scales: ", self.current_scales)
-            log.print("Margins: ", self.current_margins)
-            log.print("Kappas (Norm): ", self.current_kappas_norm)
-            if self.current_psis is not None:
-                log.print("Psis: ", [f"{x:.4f}" for x in self.current_psis])
+            log.print(
+                "[Adaptive Parameters] \n"
+                f"Gamma: {self.current_gamma} | "
+                f"Scales: {self.current_scales.cpu().numpy()} | "
+                f"Margins: {self.current_margins.cpu().numpy()} | "
+                f"Kappas Norm: {self.current_kappas_norm.cpu().numpy()} | "
+                f"Psis: {[f'{x:.4f}' for x in self.current_psis.cpu().numpy()]}"
+            )
 
             log.print(
+                "[ETF Proximity] \n"
                 f"Norm Score:{etf_status['norm_std']:.4f} | "
                 f"ETF Mean Cos:{etf_status['mean_cos']:.4f} | "
                 f"Std Cos:{etf_status['std_cos']:.4f} | "
@@ -609,30 +630,41 @@ class Trainer:
             )
 
             log.print(
-                f"[TRAIN LOSS] Combined: {avg_train_combined_loss:.4f} | "
+                f"[TRAIN LOSS] \n"
+                f"Total: {avg_train_combined_loss:.4f} | "
                 f"Kappa: {avg_train_kappa_loss:.4f} | "
                 f"Reg: {avg_train_reg_loss:.4f}"
             )
             log.print(
-                f"[VAL LOSS] Combined: {avg_combined_val_loss:.4f} | "
+                f"[VAL LOSS] \n"
+                f"Total: {avg_combined_val_loss:.4f} | "
                 f"Kappa: {avg_val_kappa_loss:.4f} | "
                 f"Reg: {avg_val_reg_loss:.4f}"
             )
 
             log.print(
+                "[Clustering Metrics] \n"
                 f"SH: {clustering_metrics['silhouette_score']} | "
                 f"NMI: {clustering_metrics['nmi_score']} | "
                 f"AMI: {clustering_metrics['ami_score']} | "
                 f"ARI: {clustering_metrics['ari_score']} | "
                 f"DBI: {clustering_metrics['dbi_score']} | "
-                f"MRL: {mrl} | "
-                f"Angular Var: {angular_var} | "
-                f"Pairwise Disperation (mean,std): {pariwise_dispersion} | "
-                f"Geodesic Var: {geodesic_var} | "
-                f"Between Class Margin (min,mean): {bcm} | "
             )
 
             log.print(
+                "[Geometric Prototype Metrics] \n"
+                f"MRL: {geo_prototype_mrl} | "
+                f"Geo-Weight Prototype alignment: {geo_weight_protptype_alignment} | "
+                f"Angular Var: {geo_prototype_angular_var} | "
+                f"Pairwise Disperation Average: {geo_prototype_pariwise_dispersion[0]} | "
+                f"Pairwise Disperation Std: {geo_prototype_pariwise_dispersion[1]} | "
+                f"Geodesic Variance: {geo_prototype_geodesic_var} | "
+                f"Between Class Margin Minimun: {geo_prototype_bcm[0]} | "
+                f"Between Class Margin Average: {geo_prototype_bcm[1]} | "
+            )
+
+            log.print(
+                "[Binary Confusion Matrix] \n"
                 f"Val Confusion: "
                 f"TP: {binary_metrics['tp']} | "
                 f"TN: {binary_metrics['tn']} | "
@@ -641,7 +673,7 @@ class Trainer:
             )
 
             log.print(
-                f"Vul/Non-vul Binary:  "
+                f"[Vul/Non-vul Binary Classification] \n"
                 f"MCC: {binary_metrics['mcc']:.4f} | "
                 f"Binary F1: {binary_metrics['f1']:.4f} | "
                 f"Binary Recall: {binary_metrics['recall']:.4f} | "
@@ -649,7 +681,7 @@ class Trainer:
             )
 
             log.print(
-                f"Multi CWE in Vul: "
+                f"[CWE Classification in Vulnerabilities] \n"
                 f"Macro MCC: {cwe_metrics['macro']['mcc']:.4f} | "
                 f"Macro F1: {cwe_metrics['macro']['f1']:.4f} | "
                 f"Macro Recall: {cwe_metrics['macro']['recall']:.4f} | "
@@ -665,7 +697,7 @@ class Trainer:
                 patience_counter = 0  # 重置耐心计数器
 
                 log.print(
-                    f"✨ Validation loss improved to {best_val_combined_loss:.4f}. Resetting patience counter."
+                    f"✅ Validation loss improved to {best_val_combined_loss:.4f}. Resetting patience counter."
                 )
 
                 # ✅ 在验证集损失最低时保存最佳模型 checkpoint
@@ -682,7 +714,7 @@ class Trainer:
                     max_checkpoints=self.train_config.MAX_CHECKPOINTS,
                 )
                 log.print(
-                    f"💾 Best model saved at epoch {epoch} with val loss {best_val_combined_loss:.4f}"
+                    f"Best model saved at epoch {epoch} with val loss {best_val_combined_loss:.4f}"
                 )
             else:
                 patience_counter += 1

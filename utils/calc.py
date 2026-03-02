@@ -31,17 +31,17 @@ def cosine_similarity_torch(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.sum(x * y, dim=-1)
 
 
-def evaluate_etf_proximity(prototypes: torch.Tensor):
+def evaluate_etf_proximity(geo_prototypes: torch.Tensor):
     """
     prototypes: [C, D], assumed L2-normalized
     return: dict with ETF diagnostics
     """
 
-    C = prototypes.size(0)
-    device = prototypes.device
+    C = geo_prototypes.size(0)
+    device = geo_prototypes.device
 
     # Gram matrix
-    G = prototypes @ prototypes.T
+    G = geo_prototypes @ geo_prototypes.T
 
     eye = torch.eye(C, device=device).bool()
     off = G[~eye]
@@ -60,13 +60,13 @@ def evaluate_etf_proximity(prototypes: torch.Tensor):
     fp = (G**2).sum().item()
 
     # ETF minimum FP = C^2 / D  (for unit vectors)
-    D = prototypes.size(1)
+    D = geo_prototypes.size(1)
     fp_opt = (C**2) / D
 
     fp_ratio = fp / fp_opt
 
     # === collapse score (prototype norm sanity) ===
-    norms = prototypes.norm(dim=1)
+    norms = geo_prototypes.norm(dim=1)
     norm_std = norms.std().item()
 
     # === heuristic ETF score (0~1, higher better) ===
@@ -255,7 +255,34 @@ def geodesic_variance(X):
     return np.mean(theta**2)
 
 
-def between_class_angular_margin(X, y):
+def prototype_alignment(weight_prototypes, geo_prototypes):
+    """
+    计算 prototypes 的角度对齐程度
+
+    Args:
+        weight_prototypes : (K, D)
+        geo_prototypes    : (K, D)
+
+    Returns:
+        mean_angle (radians)
+        per_class_angles
+    """
+
+    # ---- 1️⃣ L2 normalize ----
+    W = weight_prototypes / np.linalg.norm(weight_prototypes, axis=1, keepdims=True)
+    G = geo_prototypes / np.linalg.norm(geo_prototypes, axis=1, keepdims=True)
+
+    # ---- 2️⃣ cosine similarity ----
+    cos_vals = np.sum(W * G, axis=1)
+    cos_vals = np.clip(cos_vals, -1.0, 1.0)
+
+    # ---- 3️⃣ angle ----
+    angles = np.arccos(cos_vals)
+
+    return angles.mean()
+
+
+def between_class_angular_margin(geo_prototypes):
     """
     计算类中心之间的最小角距离（margin）
     以及平均类间角距离
@@ -264,24 +291,12 @@ def between_class_angular_margin(X, y):
         min_margin (radians)
         mean_margin (radians)
     """
-    classes = np.unique(y)
-    if len(classes) == 0:
-        return 0.0, 0.0
-    centroids = []
-
-    for c in classes:
-        Xc = X[y == c]
-        centroid = np.mean(Xc, axis=0)
-        centroid /= np.linalg.norm(centroid)
-        centroids.append(centroid)
-
-    centroids = np.stack(centroids)
 
     # 计算类中心之间的角度
-    cos_sim = centroids @ centroids.T
+    cos_sim = geo_prototypes @ geo_prototypes.T
     cos_sim = np.clip(cos_sim, -1.0, 1.0)
 
-    K = len(classes)
+    K = geo_prototypes.shape[0]
     mask = ~np.eye(K, dtype=bool)
     angles = np.arccos(cos_sim[mask])
 
