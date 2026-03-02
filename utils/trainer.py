@@ -36,6 +36,7 @@ from utils.calc import (
     spherical_silhouette_score,
     prototype_alignment,
 )
+from utils.string import print_dict_pipe
 from utils.logger import log
 from utils.serialize import save_to_json
 
@@ -86,11 +87,7 @@ class Trainer:
             0,
             device=self.train_config.DEVICE,
         )
-        self.current_psis = torch.full(
-            (self.num_classes,),
-            0,
-            device=self.train_config.DEVICE,
-        )
+        self.current_psis = [0] * self.num_classes
         self.current_gamma = 0
 
         self.model: AEGISModel = AEGISModel(
@@ -266,11 +263,11 @@ class Trainer:
         ari_score = adjusted_rand_score(true_labels, pred_labels)
 
         return {
-            "silhouette_score": silhouette_avg,
-            "nmi_score": nmi_score,
-            "ami_score": ami_score,
-            "ari_score": ari_score,
-            "dbi_score": dbi_score,
+            "SH": silhouette_avg,
+            "NMI": nmi_score,
+            "AMI": ami_score,
+            "ARI": ari_score,
+            "DBI": dbi_score,
         }
 
     def _evaluate_epoch(self, val_loader, epoch):
@@ -381,7 +378,7 @@ class Trainer:
             self.train_weight_prototypes.cpu().numpy(),
         )
 
-        etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
+        geo_prototypes_etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
 
         # 可视化部分保持不变
         VisualizationHelper.draw_plot_umap(
@@ -431,7 +428,7 @@ class Trainer:
             clustering_metrics,
             binary_metrics,
             cwe_metrics,
-            etf_status,
+            geo_prototypes_etf_status,
         )
 
     def train(self):
@@ -442,12 +439,8 @@ class Trainer:
             collate_fn=custom_collate_fn,
         )
 
-        # ✅ 早停相关初始化 (基于 Validation Loss)
         best_val_combined_loss = float("inf")
         patience_counter = 0
-
-        # 如果需要保存最佳模型，可以在这里定义路径或逻辑
-        # best_model_path = os.path.join(self.train_config.OUTPUT_DIR, "best_model.pth")
 
         for epoch in range(self.start_epoch, self.train_config.MAX_EPOCHES):
             g = torch.Generator()
@@ -534,7 +527,6 @@ class Trainer:
 
             # ===== Epoch 结束后统一计算自适应参数（供下一 epoch 使用）=====
 
-            # ✅【关键修复】将 CPU 上的列表 concat，然后移回 GPU
             if len(online_embeddings) > 0:
                 online_embeddings = torch.cat(online_embeddings, dim=0).to(
                     self.train_config.DEVICE
@@ -558,13 +550,7 @@ class Trainer:
                     "⚠️ No data processed in this epoch. Skipping adaptive param update."
                 )
 
-            train_duration = (
-                time.time() - batch_start_time
-            )  # 注意：这里 batch_start_time 是在第一个 batch 前记录的
-            # 更准确的 epoch 训练时间应该是 time.time() - epoch_start_time，但原代码似乎想用 batch_start_time 算平均？
-            # 这里我们沿用原代码的逻辑，但注意 batch_start_time 是在 loop 前定义的，所以 train_duration 近似等于 epoch 训练时间
-            # 如果要精确计算平均每个 sample 的时间，用 epoch_duration / num_samples_in_epoch 更好
-
+            train_duration = time.time() - batch_start_time
             avg_sample_time_ms = (
                 (train_duration / num_samples_in_epoch) * 1000
                 if num_samples_in_epoch > 0
@@ -591,9 +577,9 @@ class Trainer:
                 self.train_geo_prototypes = self._compute_geometric_prototypes(
                     online_embeddings, online_truth_classes
                 ).detach()
-            self.train_weight_prototypes = F.normalize(
-                self.model.kappaface_head.weight.detach(), dim=1
-            )
+                self.train_weight_prototypes = F.normalize(
+                    self.model.kappaface_head.weight.detach(), dim=1
+                )
 
             (
                 avg_combined_val_loss,
@@ -608,7 +594,7 @@ class Trainer:
                 clustering_metrics,
                 binary_metrics,
                 cwe_metrics,
-                etf_status,
+                geo_prototypes_etf_status,
             ) = self._evaluate_epoch(val_loader, epoch)
 
             log.print(
@@ -617,38 +603,39 @@ class Trainer:
                 f"Scales: {self.current_scales.cpu().numpy()} | "
                 f"Margins: {self.current_margins.cpu().numpy()} | "
                 f"Kappas Norm: {self.current_kappas_norm.cpu().numpy()} | "
-                f"Psis: {[f'{x:.4f}' for x in self.current_psis.cpu().numpy()]}"
+                f"Psis: {[f'{x:.4f}' for x in self.current_psis]}",
+                "\n",
             )
 
             log.print(
-                "[ETF Proximity] \n"
-                f"Norm Score:{etf_status['norm_std']:.4f} | "
-                f"ETF Mean Cos:{etf_status['mean_cos']:.4f} | "
-                f"Std Cos:{etf_status['std_cos']:.4f} | "
-                f"Frame Potential Ratio:{etf_status['fp_ratio']:.4f} | "
-                f"ETF Score:{etf_status['etf_score']:.4f}"
+                "[Geometric Prototypes ETF Proximity] \n",
+                print_dict_pipe(
+                    geo_prototypes_etf_status, float_format="{:.4f}", pipe_sep=" | "
+                ),
+                "\n",
             )
 
             log.print(
                 f"[TRAIN LOSS] \n"
                 f"Total: {avg_train_combined_loss:.4f} | "
                 f"Kappa: {avg_train_kappa_loss:.4f} | "
-                f"Reg: {avg_train_reg_loss:.4f}"
+                f"Reg: {avg_train_reg_loss:.4f}",
+                "\n",
             )
             log.print(
                 f"[VAL LOSS] \n"
                 f"Total: {avg_combined_val_loss:.4f} | "
                 f"Kappa: {avg_val_kappa_loss:.4f} | "
-                f"Reg: {avg_val_reg_loss:.4f}"
+                f"Reg: {avg_val_reg_loss:.4f}",
+                "\n",
             )
 
             log.print(
-                "[Clustering Metrics] \n"
-                f"SH: {clustering_metrics['silhouette_score']} | "
-                f"NMI: {clustering_metrics['nmi_score']} | "
-                f"AMI: {clustering_metrics['ami_score']} | "
-                f"ARI: {clustering_metrics['ari_score']} | "
-                f"DBI: {clustering_metrics['dbi_score']} | "
+                "[Clustering Metrics] \n",
+                print_dict_pipe(
+                    clustering_metrics, float_format="{:.4f}", pipe_sep=" | "
+                ),
+                "\n",
             )
 
             log.print(
@@ -660,12 +647,12 @@ class Trainer:
                 f"Pairwise Disperation Std: {geo_prototype_pariwise_dispersion[1]} | "
                 f"Geodesic Variance: {geo_prototype_geodesic_var} | "
                 f"Between Class Margin Minimun: {geo_prototype_bcm[0]} | "
-                f"Between Class Margin Average: {geo_prototype_bcm[1]} | "
+                f"Between Class Margin Average: {geo_prototype_bcm[1]} | ",
+                "\n",
             )
 
             log.print(
                 "[Binary Confusion Matrix] \n"
-                f"Val Confusion: "
                 f"TP: {binary_metrics['tp']} | "
                 f"TN: {binary_metrics['tn']} | "
                 f"FP: {binary_metrics['fp']} | "
@@ -677,7 +664,8 @@ class Trainer:
                 f"MCC: {binary_metrics['mcc']:.4f} | "
                 f"Binary F1: {binary_metrics['f1']:.4f} | "
                 f"Binary Recall: {binary_metrics['recall']:.4f} | "
-                f"Binary Precision: {binary_metrics['precision']:.4f}"
+                f"Binary Precision: {binary_metrics['precision']:.4f}",
+                "\n",
             )
 
             log.print(
@@ -685,8 +673,8 @@ class Trainer:
                 f"Macro MCC: {cwe_metrics['macro']['mcc']:.4f} | "
                 f"Macro F1: {cwe_metrics['macro']['f1']:.4f} | "
                 f"Macro Recall: {cwe_metrics['macro']['recall']:.4f} | "
-                f"Macro Precision: {cwe_metrics['macro']['precision']:.4f} | "
-                f"HierAcc: {cwe_metrics['hier_acc']:.4f}"
+                f"Macro Precision: {cwe_metrics['macro']['precision']:.4f}",
+                "\n",
             )
 
             # ==================== ✅ 修改后的早停逻辑 (基于 Validation Combined Loss) ====================

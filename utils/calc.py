@@ -33,57 +33,103 @@ def cosine_similarity_torch(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 def evaluate_etf_proximity(geo_prototypes: torch.Tensor):
     """
-    prototypes: [C, D], assumed L2-normalized
-    return: dict with ETF diagnostics
+    Evaluate how close a set of prototypes is to an Equiangular Tight Frame (ETF).
+
+    Args:
+        geo_prototypes : Tensor [C, D]
+            Class prototypes / centroids.
+            Should already be L2-normalized.
+
+    Returns:
+        dict containing ETF diagnostics.
     """
 
     C = geo_prototypes.size(0)
+    D = geo_prototypes.size(1)
     device = geo_prototypes.device
 
-    # Gram matrix
+    # ------------------------------------------------------------
+    # 1️⃣ Gram Matrix
+    # ------------------------------------------------------------
+    # G_ij = <w_i, w_j>
+    # measures cosine similarity between every pair of prototypes
     G = geo_prototypes @ geo_prototypes.T
 
+    # remove diagonal (self similarity = 1)
     eye = torch.eye(C, device=device).bool()
-    off = G[~eye]
+    off_diag_cosines = G[~eye]
 
-    # === theoretical simplex value ===
-    target = -1.0 / (C - 1)
+    # ------------------------------------------------------------
+    # 2️⃣ Theoretical ETF cosine
+    # ------------------------------------------------------------
+    # In a perfect ETF:
+    # cos(w_i, w_j) = -1/(C-1)
+    target_simplex_cosine = -1.0 / (C - 1)
 
-    # === metrics ===
-    mean_cos = off.mean().item()
-    std_cos = off.std().item()
-    max_dev = (off - target).abs().max().item()
-    mse = ((off - target) ** 2).mean().item()
+    # ------------------------------------------------------------
+    # 3️⃣ Pairwise cosine diagnostics
+    # ------------------------------------------------------------
+    # mean cosine between different class prototypes
+    mean_interclass_cosine = off_diag_cosines.mean().item()
+    distance_to_mean_intraclass_cosine = abs(
+        mean_interclass_cosine - target_simplex_cosine
+    )
 
-    # === frame potential ===
-    # FP = sum_ij <wi,wj>^2
-    fp = (G**2).sum().item()
+    # std of those cosines
+    # small std means angles are nearly equal → closer to simplex
+    std_interclass_cosine = off_diag_cosines.std().item()
 
-    # ETF minimum FP = C^2 / D  (for unit vectors)
-    D = geo_prototypes.size(1)
-    fp_opt = (C**2) / D
+    # maximum deviation from ideal ETF cosine
+    max_abs_cosine_deviation = (
+        (off_diag_cosines - target_simplex_cosine).abs().max().item()
+    )
 
-    fp_ratio = fp / fp_opt
+    # mean squared error to theoretical simplex cosine
+    mse_to_simplex_structure = (
+        ((off_diag_cosines - target_simplex_cosine) ** 2).mean().item()
+    )
 
-    # === collapse score (prototype norm sanity) ===
-    norms = geo_prototypes.norm(dim=1)
-    norm_std = norms.std().item()
+    # ------------------------------------------------------------
+    # 4️⃣ Frame Potential
+    # ------------------------------------------------------------
+    # FP = Σ_ij <w_i,w_j>^2
+    # ETF minimizes frame potential for unit vectors
+    frame_potential = (G**2).sum().item()
 
-    # === heuristic ETF score (0~1, higher better) ===
-    score = torch.exp(-10 * torch.tensor(mse)).item()
+    # theoretical minimum FP for ETF
+    optimal_frame_potential = (C**2) / D
+
+    # ratio to optimum (1.0 means perfect ETF)
+    frame_potential_ratio = frame_potential / optimal_frame_potential
+
+    # ------------------------------------------------------------
+    # 5️⃣ Prototype norm sanity check
+    # ------------------------------------------------------------
+    # if prototypes are normalized correctly,
+    # norms should all be ≈1
+    prototype_norm_std = geo_prototypes.norm(dim=1).std().item()
+
+    # ------------------------------------------------------------
+    # 6️⃣ Heuristic ETF score (0~1)
+    # ------------------------------------------------------------
+    # exponential transform of MSE
+    # closer to ETF → score closer to 1
+    etf_alignment_score = torch.exp(-10 * torch.tensor(mse_to_simplex_structure)).item()
 
     return {
-        "C": C,
-        "target_cos": target,
-        "mean_cos": mean_cos,
-        "std_cos": std_cos,
-        "max_abs_dev": max_dev,
-        "mse_to_simplex": mse,
-        "frame_potential": fp,
-        "fp_optimal": fp_opt,
-        "fp_ratio": fp_ratio,
-        "norm_std": norm_std,
-        "etf_score": score,
+        # pairwise cosine diagnostics
+        "distance_to_mean_interclass_cosine": distance_to_mean_intraclass_cosine,
+        "std_interclass_cosine": std_interclass_cosine,
+        "max_abs_cosine_deviation": max_abs_cosine_deviation,
+        "mse_to_simplex_structure": mse_to_simplex_structure,
+        # frame potential diagnostics
+        "frame_potential": frame_potential,
+        "optimal_frame_potential": optimal_frame_potential,
+        "frame_potential_ratio": frame_potential_ratio,
+        # normalization sanity
+        "prototype_norm_std": prototype_norm_std,
+        # overall heuristic score
+        "etf_alignment_score": etf_alignment_score,
     }
 
 
