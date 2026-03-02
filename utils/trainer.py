@@ -601,80 +601,71 @@ class Trainer:
             ) = self._evaluate_epoch(val_loader, epoch)
 
             log.print(
-                "[Adaptive Parameters] \n"
-                f"Gamma: {self.current_gamma}\n"
-                f"Scales: {self.current_scales.cpu().numpy()}\n"
-                f"Margins: {self.current_margins.cpu().numpy()}\n"
-                f"Kappas Norm: {self.current_kappas_norm.cpu().numpy()}\n"
+                "[Adaptive Parameters] "
+                f"Gamma: {self.current_gamma} | "
+                f"Scales: {self.current_scales.cpu().numpy()} | "
+                f"Margins: {self.current_margins.cpu().numpy()} | "
+                f"Kappas Norm: {self.current_kappas_norm.cpu().numpy()} | "
                 f"Psis: {[f'{x:.4f}' for x in self.current_psis]}",
-                "\n",
             )
 
             log.print(
-                "[Geometric Prototypes ETF Proximity] \n",
+                "[Geometric Prototypes ETF Proximity] ",
                 print_dict_pipe(geo_prototypes_etf_status),
-                "\n",
             )
 
             log.print(
-                f"[TRAIN LOSS] \n"
-                f"Total: {avg_train_combined_loss:.4f}\n"
-                f"Kappa: {avg_train_kappa_loss:.4f}\n"
+                f"[TRAIN LOSS] "
+                f"Total: {avg_train_combined_loss:.4f} | "
+                f"Kappa: {avg_train_kappa_loss:.4f} | "
                 f"Reg: {avg_train_reg_loss:.4f}",
-                "\n",
             )
             log.print(
-                f"[VAL LOSS] \n"
-                f"Total: {avg_combined_val_loss:.4f}\n"
-                f"Kappa: {avg_val_kappa_loss:.4f}\n"
+                f"[VAL LOSS] "
+                f"Total: {avg_combined_val_loss:.4f} | "
+                f"Kappa: {avg_val_kappa_loss:.4f} | "
                 f"Reg: {avg_val_reg_loss:.4f}",
-                "\n",
             )
 
             log.print(
-                "[Clustering Metrics] \n",
+                "[Clustering Metrics] ",
                 print_dict_pipe(clustering_metrics),
-                "\n",
             )
 
             log.print(
-                "[Geometric Prototype Metrics] \n"
-                f"MRL: {geo_prototype_mrl}\n"
-                f"Geo-Weight Prototype alignment: {geo_weight_protptype_alignment}\n"
-                f"Angular Var: {geo_prototype_angular_var}\n"
-                f"Pairwise Disperation Average: {geo_prototype_pariwise_dispersion[0]}\n"
-                f"Pairwise Disperation Std: {geo_prototype_pariwise_dispersion[1]}\n"
-                f"Geodesic Variance: {geo_prototype_geodesic_var}\n"
-                f"Between Class Margin Minimun: {geo_prototype_bcm[0]}\n"
+                "[Geometric Prototype Metrics] "
+                f"MRL: {geo_prototype_mrl} | "
+                f"Geo-Weight Prototype alignment: {geo_weight_protptype_alignment} | "
+                f"Angular Var: {geo_prototype_angular_var} | "
+                f"Pairwise Disperation Average: {geo_prototype_pariwise_dispersion[0]} | "
+                f"Pairwise Disperation Std: {geo_prototype_pariwise_dispersion[1]} | "
+                f"Geodesic Variance: {geo_prototype_geodesic_var} | "
+                f"Between Class Margin Minimun: {geo_prototype_bcm[0]} | "
                 f"Between Class Margin Average: {geo_prototype_bcm[1]}"
-                "\n",
             )
 
             log.print(
-                "[Binary Confusion Matrix] \n"
-                f"TP: {binary_metrics['tp']}\n"
-                f"TN: {binary_metrics['tn']}\n"
-                f"FP: {binary_metrics['fp']}\n"
+                "[Binary Confusion Matrix] "
+                f"TP: {binary_metrics['tp']} | "
+                f"TN: {binary_metrics['tn']} | "
+                f"FP: {binary_metrics['fp']} | "
                 f"FN: {binary_metrics['fn']}"
-                "\n"
             )
 
             log.print(
-                f"[Vul/Non-vul Binary Classification] \n"
-                f"MCC: {binary_metrics['mcc']:.4f}\n"
-                f"Binary F1: {binary_metrics['f1']:.4f}\n"
-                f"Binary Recall: {binary_metrics['recall']:.4f}\n"
+                f"[Vul/Non-vul Binary Classification] "
+                f"MCC: {binary_metrics['mcc']:.4f} | "
+                f"Binary F1: {binary_metrics['f1']:.4f} | "
+                f"Binary Recall: {binary_metrics['recall']:.4f} | "
                 f"Binary Precision: {binary_metrics['precision']:.4f}",
-                "\n",
             )
 
             log.print(
-                f"[CWE Classification in Vulnerabilities] \n"
-                f"Macro MCC: {cwe_metrics['macro']['mcc']:.4f}\n"
-                f"Macro F1: {cwe_metrics['macro']['f1']:.4f}\n"
-                f"Macro Recall: {cwe_metrics['macro']['recall']:.4f}\n"
+                f"[CWE Classification in Vulnerabilities] "
+                f"Macro MCC: {cwe_metrics['macro']['mcc']:.4f} | "
+                f"Macro F1: {cwe_metrics['macro']['f1']:.4f} | "
+                f"Macro Recall: {cwe_metrics['macro']['recall']:.4f} | "
                 f"Macro Precision: {cwe_metrics['macro']['precision']:.4f}",
-                "\n",
             )
 
             # ==================== ✅ 修改后的早停逻辑 (基于 Validation Combined Loss) ====================

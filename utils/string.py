@@ -4,4 +4,4 @@ def print_dict_pipe(d: dict, precision=5):
         if isinstance(v, float):
             v = f"{v:.{precision}f}"
         parts.append(f"{k}={v}")
-    return "\n".join(parts)
+    return " | ".join(parts)
