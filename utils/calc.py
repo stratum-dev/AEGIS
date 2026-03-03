@@ -4,10 +4,99 @@ import torch
 from torch.functional import F
 from scipy.spatial import SphericalVoronoi
 
+# -------------------- Collapse Metrics --------------------
 
-def normalize(x):
-    return x / np.linalg.norm(x, axis=1, keepdims=True)
+def l2_norm(x: torch.Tensor) -> torch.Tensor:
+    """L2 normalize along last dimension"""
+    return F.normalize(x, p=2, dim=-1)
 
+def pairwise_angle(x: torch.Tensor) -> torch.Tensor:
+    """
+    Compute pairwise angles (radians) between rows of x
+    x: (N, D) tensor, assumed L2-normalized
+    """
+    cos = x @ x.T
+    cos = torch.clamp(cos, -1.0, 1.0)
+    return torch.acos(cos)
+
+def compute_abd(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> float:
+    """
+    Angular Boundary Deviation (ABD)
+    """
+    W = l2_norm(geo_prototypes)
+    M = l2_norm(class_means)
+    proto_angles = pairwise_angle(W)
+    mean_angles = pairwise_angle(M)
+
+    C = W.shape[0]
+    abd = torch.sum(torch.abs(proto_angles - mean_angles)) / (C * (C - 1))
+    return abd.item()
+
+def compute_pcr(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> float:
+    """
+    Prototype Collapse Ratio (PCR)
+    """
+    W = l2_norm(geo_prototypes)
+    M = l2_norm(class_means)
+    proto_angles = pairwise_angle(W)
+    mean_angles = pairwise_angle(M)
+
+    mask = ~torch.eye(W.shape[0], dtype=torch.bool, device=W.device)
+    ratios = torch.abs(proto_angles[mask] - mean_angles[mask]) / proto_angles[mask]
+    return ratios.mean().item()
+
+def compute_effective_width(class_geo_prototypes: torch.Tensor) -> torch.Tensor:
+    """
+    Effective angular width per class
+    """
+    M = l2_norm(class_geo_prototypes)
+    angles = pairwise_angle(M)
+    mask = ~torch.eye(M.shape[0], dtype=torch.bool, device=M.device)
+
+    widths = []
+    for i in range(M.shape[0]):
+        widths.append(angles[i, mask[i]].mean())
+    return torch.stack(widths)
+
+def spherical_voronoi_distortion(geo_prototypes: torch.Tensor, class_means: torch.Tensor):
+    """
+    Spherical Voronoi distortion using torch only (approximate by angles)
+    """
+    W = l2_norm(geo_prototypes)
+    M = l2_norm(class_means)
+
+    # Compute "cell area" approximation: sum of angles to other points
+    proto_area = torch.zeros(W.shape[0], device=W.device)
+    data_area = torch.zeros(M.shape[0], device=M.device)
+
+    for i in range(W.shape[0]):
+        proto_area[i] = torch.sum(torch.acos(torch.clamp(W[i] @ W.T, -1.0, 1.0)))
+    for i in range(M.shape[0]):
+        data_area[i] = torch.sum(torch.acos(torch.clamp(M[i] @ M.T, -1.0, 1.0)))
+
+    proto_area /= proto_area.sum()
+    data_area /= data_area.sum()
+    distortion = torch.mean(torch.abs(proto_area - data_area))
+
+    return distortion.item(), proto_area, data_area
+
+def compute_collapse_metrics(geo_prototypes: torch.Tensor, class_means: torch.Tensor):
+    abd = compute_abd(geo_prototypes, class_means)
+    pcr = compute_pcr(geo_prototypes, class_means)
+    widths = compute_effective_width(class_means)
+    distortion, proto_area, data_area = spherical_voronoi_distortion(geo_prototypes, class_means)
+    area_diff = proto_area - data_area
+
+    return {
+        "Boundary Deviation": abd,
+        "Prototype Collapse Ratio": pcr,
+        "Effective Width Average": widths.mean().item(),
+        "Effective Width Std": widths.std().item(),
+        "Prototype Areas": proto_area,
+        "Data Areas": data_area,
+        "Area Diff": area_diff,
+        "Spherical Voronoi Distortion": distortion,
+    }
 
 def geometric_median(
     X: torch.Tensor, eps: float = 1e-6, max_iter: int = 100
@@ -26,114 +115,30 @@ def geometric_median(
     return y
 
 
-def pairwise_angle(x):
+def pairwise_angle(x: torch.Tensor) -> torch.Tensor:
     """
-    计算两两向量夹角 (弧度)
+    Compute pairwise angles (radians) between rows of x
+    Args:
+        x: (N, D) tensor, assumed already L2-normalized
+    Returns:
+        (N, N) tensor of angles in radians
     """
+    # 计算余弦相似度矩阵
     cos = x @ x.T
-    cos = np.clip(cos, -1.0, 1.0)
-    return np.arccos(cos)
+    # 限制在 [-1, 1] 防止数值溢出
+    cos = torch.clamp(cos, -1.0, 1.0)
+    # 计算弧度角
+    angles = torch.acos(cos)
+    return angles
 
 
-def l2_norm(x: torch.Tensor) -> torch.Tensor:
-    """L2 normalize tensor along last dimension"""
+def l2_norm(x):
     return F.normalize(x, p=2, dim=-1)
 
 
 def cosine_similarity_torch(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     """Compute cosine similarity between x and y (both normalized)"""
     return torch.sum(x * y, dim=-1)
-
-
-def compute_abd(geo_prototypes, class_means):
-    """
-    ABD: Angular Boundary Deviation
-    """
-    W = normalize(geo_prototypes)
-    M = normalize(class_means)
-
-    proto_angles = pairwise_angle(W)
-    mean_angles = pairwise_angle(M)
-
-    C = W.shape[0]
-
-    abd = 0
-    count = 0
-
-    for i in range(C):
-        for j in range(i + 1, C):
-            abd += abs(proto_angles[i, j] - mean_angles[i, j])
-            count += 1
-
-    return abd / count
-
-
-def compute_pcr(geo_prototypes, class_means):
-    """
-    Prototype Collapse Ratio
-    """
-    W = normalize(geo_prototypes)
-    M = normalize(class_means)
-
-    proto_angles = pairwise_angle(W)
-    mean_angles = pairwise_angle(M)
-
-    C = W.shape[0]
-
-    ratios = []
-
-    for i in range(C):
-        for j in range(i + 1, C):
-            theta_p = proto_angles[i, j]
-            theta_m = mean_angles[i, j]
-
-            ratios.append(abs(theta_p - theta_m) / theta_p)
-
-    return np.mean(ratios)
-
-
-def compute_collapse_metrics(geo_prototypes, class_means):
-
-    abd = compute_abd(geo_prototypes, class_means)
-    pcr = compute_pcr(geo_prototypes, class_means)
-
-    widths = compute_effective_width(class_means)
-    W = normalize(geo_prototypes)
-    M = normalize(class_means)
-
-    dist, proto_area, data_area = spherical_voronoi_distortion(W, M)
-    area_diff = proto_area - data_area
-
-    svd = dist
-
-    return {
-        "Boundary Deviation": abd,
-        "Prototype Collapse Ratio": pcr,
-        "Effective Width Average": widths.mean(),
-        "Effective Width Std": widths.std(),
-        "Prototype Areas": proto_area,
-        "Data Areas": data_area,
-        "Area Diff": area_diff,
-        "Spherical Voronoi Distortion": svd,
-    }
-
-
-def compute_effective_width(class_geo_prototypes):
-    """
-    每个类别有效角宽
-    """
-    M = normalize(class_geo_prototypes)
-    angles = pairwise_angle(M)
-
-    C = M.shape[0]
-
-    widths = []
-
-    for i in range(C):
-        others = [angles[i, j] for j in range(C) if j != i]
-        widths.append(np.mean(others))
-
-    return np.array(widths)
 
 
 def spherical_cell_areas(points):
@@ -153,22 +158,6 @@ def spherical_cell_areas(points):
         areas.append(area)
 
     return np.array(areas)
-
-
-def spherical_voronoi_distortion(geo_prototypes, class_means):
-
-    W = normalize(geo_prototypes)
-    M = normalize(class_means)
-
-    proto_areas = spherical_cell_areas(W)
-    data_areas = spherical_cell_areas(M)
-
-    proto_areas /= proto_areas.sum()
-    data_areas /= data_areas.sum()
-
-    distortion = np.mean(np.abs(proto_areas - data_areas))
-
-    return distortion, proto_areas, data_areas
 
 
 def evaluate_etf_proximity(geo_prototypes: torch.Tensor):
@@ -377,15 +366,6 @@ def compute_class_separation_index(embeddings: np.ndarray, labels: np.ndarray) -
     if max_diameter == 0:
         return float("inf") if min_centroid_dist > 0 else 0.0
     return min_centroid_dist / max_diameter
-
-
-import numpy as np
-
-
-def l2_normalize(X, eps=1e-12):
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
-    return X / np.clip(norms, eps, None)
-
 
 # 1️⃣ Mean Resultant Length
 def mean_resultant_length(X):

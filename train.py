@@ -10,10 +10,10 @@ from datetime import datetime
 
 # ============================ Huggingface Repo =================================
 # The dataset repository
-DATASET_REPO = "codemetic/AEGIS-dataset"
+DATASET_REPO = "codemetic/AEGIS"
 # Subset for above repo.
 # Avaliable at: "bigvul", "mvd", "megavul", "draper", "reposvul", "diversevul"
-SUBSET_NAME = "bigvul"
+SUBSET_NAME = "primevul-paired"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"

@@ -29,7 +29,7 @@ from utils.calc import (
     evaluate_etf_proximity,
     geodesic_variance,
     geometric_median,
-    l2_normalize,
+    l2_norm,
     mean_resultant_length,
     pairwise_angular_dispersion,
     spherical_davies_bouldin,
@@ -245,7 +245,6 @@ class Trainer:
     def _calculate_clustering_metrics(self, embeddings, true_labels, pred_labels):
         true_labels = np.array(true_labels)
         pred_labels = np.array(pred_labels)
-        embeddings = l2_normalize(np.array(embeddings))
 
         silhouette_avg = (
             spherical_silhouette_score(embeddings, pred_labels)
@@ -352,9 +351,8 @@ class Trainer:
         cwe_metrics = MetricCalculator.calculate_l2_metrics(
             all_pred_class_indices, all_truth_class_keys, self.index_to_class
         )
-        all_val_embeddings = np.concatenate(all_val_embeddings, axis=0)
         clustering_metrics = self._calculate_clustering_metrics(
-            all_val_embeddings,
+            np.concatenate(all_val_embeddings, axis=0),
             [self.class_to_index[k] for k in all_truth_class_keys],
             all_pred_class_indices,
         )
@@ -381,11 +379,13 @@ class Trainer:
 
         geo_prototypes_etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
 
-        collapse_metrics = compute_collapse_metrics(self.train_geo_prototypes)
+        collapse_metrics = compute_collapse_metrics(
+            self.train_geo_prototypes, self.train_avg_prototypes
+        )
 
         # 可视化部分保持不变
         VisualizationHelper.draw_plot_umap(
-            all_val_embeddings,
+            np.concatenate(all_val_embeddings, axis=0),
             all_truth_class_keys,
             self.train_config.UMAP_OUTPUT_DIR,
             f"{epoch}.svg",
