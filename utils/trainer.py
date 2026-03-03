@@ -35,6 +35,7 @@ from utils.calc import (
     spherical_davies_bouldin,
     spherical_silhouette_score,
     prototype_alignment,
+    compute_collapse_metrics,
 )
 from utils.string import print_dict_pipe
 from utils.logger import log
@@ -380,6 +381,8 @@ class Trainer:
 
         geo_prototypes_etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
 
+        collapse_metrics = compute_collapse_metrics(self.train_geo_prototypes)
+
         # 可视化部分保持不变
         VisualizationHelper.draw_plot_umap(
             all_val_embeddings,
@@ -429,6 +432,7 @@ class Trainer:
             binary_metrics,
             cwe_metrics,
             geo_prototypes_etf_status,
+            collapse_metrics,
         )
 
     def train(self):
@@ -598,6 +602,7 @@ class Trainer:
                 binary_metrics,
                 cwe_metrics,
                 geo_prototypes_etf_status,
+                collapse_metrics,
             ) = self._evaluate_epoch(val_loader, epoch)
 
             log.print(
@@ -644,6 +649,8 @@ class Trainer:
                 f"Between Class Margin Average: {geo_prototype_bcm[1]}"
             )
 
+            log.print("[Collapse Metrics] ", print_dict_pipe(collapse_metrics))
+
             log.print(
                 "[Binary Confusion Matrix] "
                 f"TP: {binary_metrics['tp']} | "
@@ -654,7 +661,7 @@ class Trainer:
 
             log.print(
                 f"[Vul/Non-vul Binary Classification] "
-                f"MCC: {binary_metrics['mcc']:.4f} | "
+                f"Binary MCC: {binary_metrics['mcc']:.4f} | "
                 f"Binary F1: {binary_metrics['f1']:.4f} | "
                 f"Binary Recall: {binary_metrics['recall']:.4f} | "
                 f"Binary Precision: {binary_metrics['precision']:.4f}",
