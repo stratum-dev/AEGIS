@@ -197,11 +197,12 @@ class Trainer:
         # gamma reflects reliability of kappa estimation
         # larger variance -> rely more on concentration
 
-        # kappa_std = torch.std(kappas)
-        # kappa_mean = torch.mean(kappas).clamp(min=1e-6)
+        kappa_std = torch.std(kappas)
+        kappa_mean = torch.mean(kappas).clamp(min=1e-6)
 
-        # gamma = (kappa_std / (kappa_std + kappa_mean)).clamp(0.0, 1.0).item()
-        gamma = 0.5
+        gamma = (kappa_std / (kappa_std + kappa_mean)).clamp(0.0, 1.0).item()
+
+        # gamma = 0.5
         # ===== final margin =====
         for c in range(self.num_classes):
             psi = (gamma) * omega_k[c].item() + (1 - gamma) * omega_f[c].item()

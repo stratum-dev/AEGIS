@@ -6,9 +6,14 @@ from scipy.spatial import SphericalVoronoi
 
 # -------------------- Collapse Metrics --------------------
 
+import torch
+import torch.nn.functional as F
+
+
 def l2_norm(x: torch.Tensor) -> torch.Tensor:
     """L2 normalize along last dimension"""
     return F.normalize(x, p=2, dim=-1)
+
 
 def pairwise_angle(x: torch.Tensor) -> torch.Tensor:
     """
@@ -19,35 +24,91 @@ def pairwise_angle(x: torch.Tensor) -> torch.Tensor:
     cos = torch.clamp(cos, -1.0, 1.0)
     return torch.acos(cos)
 
+
 def compute_abd(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> float:
     """
     Angular Boundary Deviation (ABD)
+    Measures the average absolute difference between prototype boundaries and data boundaries.
     """
     W = l2_norm(geo_prototypes)
     M = l2_norm(class_means)
+
+    # We compare the pairwise angle matrices directly
     proto_angles = pairwise_angle(W)
     mean_angles = pairwise_angle(M)
 
     C = W.shape[0]
-    abd = torch.sum(torch.abs(proto_angles - mean_angles)) / (C * (C - 1))
+    # Exclude diagonal (self-comparison is 0)
+    mask = ~torch.eye(C, dtype=torch.bool, device=W.device)
+
+    diff = torch.abs(proto_angles[mask] - mean_angles[mask])
+    abd = torch.sum(diff) / (C * (C - 1))
     return abd.item()
+
 
 def compute_pcr(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> float:
     """
-    Prototype Collapse Ratio (PCR)
+    Prototype Collapse Ratio (PCR) - Approximate Version
+    Measures how much the Data Distribution extends beyond the Prototype's 'fair share' relative to neighbors.
+    High PCR = Data is being cut off (False Negatives).
     """
     W = l2_norm(geo_prototypes)
     M = l2_norm(class_means)
+
     proto_angles = pairwise_angle(W)
     mean_angles = pairwise_angle(M)
 
     mask = ~torch.eye(W.shape[0], dtype=torch.bool, device=W.device)
-    ratios = torch.abs(proto_angles[mask] - mean_angles[mask]) / proto_angles[mask]
+
+    # Logic: If mean_angles[i, j] > proto_angles[i, j], it implies the data spread
+    # between i and j is wider than the prototype boundary suggests.
+    # This is a proxy for data spilling over the boundary.
+
+    # Calculate relative excess for each pair
+    # Avoid division by zero if prototypes are identical (rare)
+    safe_proto_angles = torch.clamp(proto_angles[mask], min=1e-6)
+
+    excess = torch.relu(mean_angles[mask] - proto_angles[mask])
+    ratios = excess / safe_proto_angles
+
     return ratios.mean().item()
+
+
+def compute_decision_intrusion(
+    geo_prototypes: torch.Tensor,
+    class_means: torch.Tensor,
+    proto_areas: torch.Tensor = None,
+    data_areas: torch.Tensor = None,
+) -> float:
+    W = l2_norm(geo_prototypes)
+    M = l2_norm(class_means)
+    C = W.shape[0]
+
+    # Re-calculate areas if not provided (to keep function standalone, though passing is more efficient)
+    if proto_areas is None or data_areas is None:
+        # Approximation: Sum of angles to all other points as a proxy for "cell size" influence
+        # Note: This is the same logic as your spherical_voronoi_distortion
+        proto_sums = torch.sum(pairwise_angle(W), dim=1)
+        data_sums = torch.sum(pairwise_angle(M), dim=1)
+
+        proto_areas = proto_sums / proto_sums.sum()
+        data_areas = data_sums / data_sums.sum()
+
+    # Prevent division by zero
+    safe_proto_areas = torch.clamp(proto_areas, min=1e-9)
+
+    # Calculate intrusion: How much bigger is the Proto Cell compared to Data Spread?
+    # If proto_area > data_area, the prototype claims space the data doesn't fill.
+    intrusion = torch.relu(proto_areas - data_areas)
+
+    dir_per_class = intrusion / safe_proto_areas
+
+    return dir_per_class.mean().item(), dir_per_class
+
 
 def compute_effective_width(class_geo_prototypes: torch.Tensor) -> torch.Tensor:
     """
-    Effective angular width per class
+    Effective angular width per class (Average distance to other class centers)
     """
     M = l2_norm(class_geo_prototypes)
     angles = pairwise_angle(M)
@@ -58,45 +119,69 @@ def compute_effective_width(class_geo_prototypes: torch.Tensor) -> torch.Tensor:
         widths.append(angles[i, mask[i]].mean())
     return torch.stack(widths)
 
-def spherical_voronoi_distortion(geo_prototypes: torch.Tensor, class_means: torch.Tensor):
+
+def spherical_voronoi_distortion(
+    geo_prototypes: torch.Tensor, class_means: torch.Tensor
+):
     """
     Spherical Voronoi distortion using torch only (approximate by angles)
+    Returns distortion score and the area vectors for reuse.
     """
     W = l2_norm(geo_prototypes)
     M = l2_norm(class_means)
 
     # Compute "cell area" approximation: sum of angles to other points
-    proto_area = torch.zeros(W.shape[0], device=W.device)
-    data_area = torch.zeros(M.shape[0], device=M.device)
+    # A larger sum of angles to neighbors implies a larger "influence zone" in this simplified metric
+    proto_sums = torch.sum(pairwise_angle(W), dim=1)
+    data_sums = torch.sum(pairwise_angle(M), dim=1)
 
-    for i in range(W.shape[0]):
-        proto_area[i] = torch.sum(torch.acos(torch.clamp(W[i] @ W.T, -1.0, 1.0)))
-    for i in range(M.shape[0]):
-        data_area[i] = torch.sum(torch.acos(torch.clamp(M[i] @ M.T, -1.0, 1.0)))
+    proto_area = proto_sums / proto_sums.sum()
+    data_area = data_sums / data_sums.sum()
 
-    proto_area /= proto_area.sum()
-    data_area /= data_area.sum()
     distortion = torch.mean(torch.abs(proto_area - data_area))
 
     return distortion.item(), proto_area, data_area
 
+
 def compute_collapse_metrics(geo_prototypes: torch.Tensor, class_means: torch.Tensor):
+    """
+    Comprehensive metrics for Spherical Prototype Collapse.
+    """
+    # 1. Boundary Deviation
     abd = compute_abd(geo_prototypes, class_means)
+
+    # 2. Preliminary Areas (Reuse for efficiency)
+    distortion, proto_area, data_area = spherical_voronoi_distortion(
+        geo_prototypes, class_means
+    )
+
+    # 3. PCR (Recall-oriented: Did we lose data?)
     pcr = compute_pcr(geo_prototypes, class_means)
+
+    # 4. DIR (Precision-oriented: Are we invading others / hollow?)
+    dir_mean, dir_per_class = compute_decision_intrusion(
+        geo_prototypes, class_means, proto_area, data_area
+    )
+
+    # 5. Width Statistics
     widths = compute_effective_width(class_means)
-    distortion, proto_area, data_area = spherical_voronoi_distortion(geo_prototypes, class_means)
+
+    # 6. Area Analysis
     area_diff = proto_area - data_area
 
     return {
-        "Boundary Deviation": abd,
-        "Prototype Collapse Ratio": pcr,
+        "Boundary Deviation (ABD)": abd,
+        "Prototype Collapse Ratio (PCR)": pcr,  # High = Data Spillover (False Negatives)
+        "Decision Intrusion Ratio (DIR)": dir_mean,  # High = Empty Space/Aggression (False Positives)
+        "DIR Per Class": dir_per_class,  # Useful to identify which classes are aggressive
         "Effective Width Average": widths.mean().item(),
         "Effective Width Std": widths.std().item(),
-        "Prototype Areas": proto_area,
-        "Data Areas": data_area,
-        "Area Diff": area_diff,
         "Spherical Voronoi Distortion": distortion,
+        "Area Diff (Proto - Data)": area_diff,  # Positive = Aggressive, Negative = Collapsed
+        "Proto Areas": proto_area,
+        "Data Areas": data_area,
     }
+
 
 def geometric_median(
     X: torch.Tensor, eps: float = 1e-6, max_iter: int = 100
@@ -366,6 +451,7 @@ def compute_class_separation_index(embeddings: np.ndarray, labels: np.ndarray) -
     if max_diameter == 0:
         return float("inf") if min_centroid_dist > 0 else 0.0
     return min_centroid_dist / max_diameter
+
 
 # 1️⃣ Mean Resultant Length
 def mean_resultant_length(X):
