@@ -281,16 +281,9 @@ class Trainer:
         # ✅ 新增：用于记录验证集损失
         total_val_loss = 0.0
         total_val_kappa_loss = 0.0
-        total_val_reg_loss = 0.0
         num_val_batches = 0
 
         self.model.eval()
-
-        # 获取当前的权重原型用于计算正则化损失 (与训练时保持一致)
-        # 注意：这里使用 detach() 因为验证时不更新权重
-        weight_prototypes = F.normalize(
-            self.model.kappaface_head.weight.detach(), dim=1
-        )
 
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Evaluating val at epoch {epoch}"):
@@ -311,15 +304,10 @@ class Trainer:
                     margins=self.current_margins,
                 )
                 val_loss_kappa = kappa_loss(logits, truth_class_indices)
-                val_loss_reg = prototype_alignment_loss(
-                    embs, truth_class_indices, weight_prototypes
-                )
-                val_loss = val_loss_kappa + val_loss_reg
 
                 # 累加损失 (item() 获取标量值)
                 total_val_loss += val_loss.item()
                 total_val_kappa_loss += val_loss_kappa.item()
-                total_val_reg_loss += val_loss_reg.item()
                 num_val_batches += 1
 
                 all_val_embeddings.append(embs.detach().cpu().numpy())
@@ -337,9 +325,6 @@ class Trainer:
         if num_val_batches > 0:
             avg_val_loss = total_val_loss / num_val_batches
             avg_val_kappa_loss = total_val_kappa_loss / num_val_batches
-            avg_val_reg_loss = total_val_reg_loss / num_val_batches
-        else:
-            avg_val_loss = avg_val_kappa_loss = avg_val_reg_loss = 0.0
 
         truth_binary = np.array(all_truth_labels)
         pred_binary = np.array(
@@ -422,7 +407,6 @@ class Trainer:
         return (
             avg_val_loss,
             avg_val_kappa_loss,
-            avg_val_reg_loss,
             geo_prototype_mrl,
             geo_prototype_angular_var,
             geo_prototype_pariwise_dispersion,
@@ -467,7 +451,6 @@ class Trainer:
             self.model.train()
 
             total_kappa_loss = 0.0
-            total_reg_loss = 0.0
             total_combined_loss = 0.0
 
             # ===== 新增：用于累积特征的列表 =====
@@ -510,26 +493,21 @@ class Trainer:
 
                     # ===== Prototype–Prototype Consistency =====
                     weight_prototypes = F.normalize(
-                        self.model.kappaface_head.weight.detach(), dim=1
+                        self.model.kappaface_head.weight, dim=1
                     )
-                    loss_reg = prototype_alignment_loss(
-                        features_norm, truth_class_indices, weight_prototypes
-                    )
-                    loss = loss_kappa + loss_reg
+                    loss = loss_kappa
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
                 total_loss += loss.item()
-                total_reg_loss += loss_reg.item()
                 total_kappa_loss += loss_kappa.item()
                 total_combined_loss += loss.item()
                 progress_bar.set_postfix(
                     {
                         "Loss": f"{loss.item():.4f}",
                         "Kappa": f"{loss_kappa.item():.4f}",
-                        "Reg": f"{loss_reg.item():.4f}",
                     }
                 )
 
@@ -571,11 +549,6 @@ class Trainer:
             if num_batches > 0:
                 avg_train_kappa_loss = total_kappa_loss / num_batches
                 avg_train_combined_loss = total_combined_loss / num_batches
-                avg_train_reg_loss = total_reg_loss / num_batches
-            else:
-                avg_train_kappa_loss = avg_train_combined_loss = avg_train_reg_loss = (
-                    0.0
-                )
 
             # ===== 保存当前 epoch 的原型（从在线编码器计算）=====
             if len(online_embeddings) > 0:
@@ -592,7 +565,6 @@ class Trainer:
             (
                 avg_combined_val_loss,
                 avg_val_kappa_loss,
-                avg_val_reg_loss,
                 geo_prototype_mrl,
                 geo_prototype_angular_var,
                 geo_prototype_pariwise_dispersion,
@@ -624,13 +596,11 @@ class Trainer:
                 f"[TRAIN LOSS] "
                 f"Total: {avg_train_combined_loss:.4f} | "
                 f"Kappa: {avg_train_kappa_loss:.4f} | "
-                f"Reg: {avg_train_reg_loss:.4f}",
             )
             log.print(
                 f"[VAL LOSS] "
                 f"Total: {avg_combined_val_loss:.4f} | "
                 f"Kappa: {avg_val_kappa_loss:.4f} | "
-                f"Reg: {avg_val_reg_loss:.4f}",
             )
 
             log.print(
