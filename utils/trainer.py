@@ -124,16 +124,32 @@ class Trainer:
         )
 
     def _is_dominated(self, new_point, existing_point):
+        """
+        判断 new_point 是否被 existing_point 支配。
+        支配定义：existing 在所有维度上都 >= new，且至少有一个维度严格 > new。
+        注意：F1 越大越好。
+        """
         b_new, m_new = new_point["binary_f1"], new_point["macro_f1"]
         b_exist, m_exist = existing_point["binary_f1"], existing_point["macro_f1"]
-        return (
-            (b_exist >= b_new)
-            and (m_exist >= m_new)
-            and ((b_exist > b_new) or (m_exist > m_new))
-        )
 
-    def _dominates(self, point_a, point_b):
-        return self._is_dominated(point_b, point_a)
+        # 如果 existing 的两个指标都大于等于 new，且至少有一个严格大于
+        if b_exist >= b_new and m_exist >= m_new:
+            if b_exist > b_new or m_exist > m_new:
+                return True
+        return False
+
+    def _update_pareto_front(self, new_point, current_front):
+        for existing in current_front:
+            if self._is_dominated(new_point, existing):
+                return current_front, False
+        new_front = []
+        for existing in current_front:
+            if not self._is_dominated(existing, new_point):
+                new_front.append(existing)
+
+        # 3. 加入新点
+        new_front.append(new_point)
+        return new_front, True
 
     def _count_classes(self, dataset):
         counts = Counter(item["class_key"] for item in dataset)
@@ -306,8 +322,8 @@ class Trainer:
                 val_loss_kappa = kappa_loss(logits, truth_class_indices)
 
                 # 累加损失 (item() 获取标量值)
-                total_val_loss += val_loss.item()
                 total_val_kappa_loss += val_loss_kappa.item()
+                total_val_loss += val_loss_kappa.item()
                 num_val_batches += 1
 
                 all_val_embeddings.append(embs.detach().cpu().numpy())
@@ -646,18 +662,28 @@ class Trainer:
                 f"Macro Precision: {cwe_metrics['macro']['precision']:.4f}",
             )
 
-            # ==================== ✅ 修改后的早停逻辑 (基于 Validation Combined Loss) ====================
+            # ==================== ✅ 基于 Pareto Front (Binary F1 & Macro F1) 的早停逻辑 ====================
 
-            # 检查当前验证集损失是否有改进
-            if avg_combined_val_loss < best_val_combined_loss:
-                best_val_combined_loss = avg_combined_val_loss
-                patience_counter = 0  # 重置耐心计数器
+            current_binary_f1 = binary_metrics["f1"]
+            current_macro_f1 = cwe_metrics["macro"]["f1"]
 
-                log.print(
-                    f"✅ Validation loss improved to {best_val_combined_loss:.4f}. Resetting patience counter."
-                )
+            current_point = {
+                "binary_f1": current_binary_f1,
+                "macro_f1": current_macro_f1,
+                "epoch": epoch,
+                "val_loss": avg_combined_val_loss,
+            }
 
-                # ✅ 在验证集损失最低时保存最佳模型 checkpoint
+            self.all_points.append(current_point)  # 记录历史
+
+            # 更新 Pareto 前沿
+            updated_front, is_pareto_optimal = self._update_pareto_front(
+                current_point, self.pareto_front
+            )
+
+            if is_pareto_optimal:
+                self.pareto_front = updated_front
+                self.pareto_patience_counter = 0
                 save_checkpoint_with_limit(
                     model=self.model,
                     avg_proto=self.train_avg_prototypes,
@@ -671,14 +697,15 @@ class Trainer:
                     max_checkpoints=self.train_config.MAX_CHECKPOINTS,
                 )
                 log.print(
-                    f"Best model saved at epoch {epoch} with val loss {best_val_combined_loss:.4f}"
+                    f"✅ Best model saved at new pareto front."
+                    f"Binary-F1={current_binary_f1:.4f}, Macro-F1={current_macro_f1:.4f}. "
                 )
             else:
-                patience_counter += 1
+                self.pareto_patience_counter += 1
                 log.print(
-                    f"⚠️ Validation loss did not improve significantly. "
-                    f"Current: {avg_combined_val_loss:.4f}, Best: {best_val_combined_loss:.4f}. "
-                    f"Patience: {patience_counter}/{self.train_config.EARLY_STOP_PATIENCE}"
+                    f"⚠️ Current point dominated by existing Pareto front. "
+                    f"Binary-F1={current_binary_f1:.4f}, Macro-F1={current_macro_f1:.4f}. "
+                    f"Patience Counter: {self.pareto_patience_counter}/{self.train_config.EARLY_STOP_PATIENCE}"
                 )
 
             log.print(
@@ -695,7 +722,7 @@ class Trainer:
                 )
                 break
 
-            if patience_counter >= self.train_config.EARLY_STOP_PATIENCE:
+            if self.pareto_patience_counter >= self.train_config.EARLY_STOP_PATIENCE:
                 log.print(
                     f"🛑 Early stopping triggered after {patience_counter} epochs without significant validation loss improvement."
                 )

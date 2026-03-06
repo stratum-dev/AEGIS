@@ -13,12 +13,12 @@ from datetime import datetime
 DATASET_REPO = "codemetic/AEGIS-dataset"
 # Subset for above repo.
 # Avaliable at: "bigvul", "mvd", "megavul", "draper", "reposvul", "diversevul"
-SUBSET_NAME = "draper"
+SUBSET_NAME = "reposvul"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
 # "Salesforce/codet5-base", "Salesforce/codet5p-220m", "Salesforce/codet5p-770m"
-BACKBONE_REPO = "Salesforce/codet5-base"
+BACKBONE_REPO = "microsoft/unixcoder-base"
 
 # ============================ Hyperparameters ==================================
 # The descriptions for these hyperparameters was intruduced in paper.
@@ -34,7 +34,7 @@ RANDOM_SEED = 42
 # ============================ Training Settings=================================
 # Fill your device here. "cuda","cuda:0","cuda:1","cuda:2", etc.
 # Mixed-precision relies on CUDA, and therefore training on CPU is NOT supported.
-DEVICE = "cuda:1"
+DEVICE = "cuda:2"
 MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
 MAX_CHECKPOINTS = 0

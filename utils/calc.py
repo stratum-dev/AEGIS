@@ -46,12 +46,7 @@ def compute_abd(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> floa
     return abd.item()
 
 
-def compute_pcr(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> float:
-    """
-    Prototype Collapse Ratio (PCR) - Approximate Version
-    Measures how much the Data Distribution extends beyond the Prototype's 'fair share' relative to neighbors.
-    High PCR = Data is being cut off (False Negatives).
-    """
+def compute_prototype_collapse_ratio_mean(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> float:
     W = l2_norm(geo_prototypes)
     M = l2_norm(class_means)
 
@@ -59,22 +54,15 @@ def compute_pcr(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> floa
     mean_angles = pairwise_angle(M)
 
     mask = ~torch.eye(W.shape[0], dtype=torch.bool, device=W.device)
-
-    # Logic: If mean_angles[i, j] > proto_angles[i, j], it implies the data spread
-    # between i and j is wider than the prototype boundary suggests.
-    # This is a proxy for data spilling over the boundary.
-
-    # Calculate relative excess for each pair
-    # Avoid division by zero if prototypes are identical (rare)
     safe_proto_angles = torch.clamp(proto_angles[mask], min=1e-6)
 
     excess = torch.relu(mean_angles[mask] - proto_angles[mask])
-    ratios = excess / safe_proto_angles
+    ratios_per_class = excess / safe_proto_angles
 
-    return ratios.mean().item()
+    return ratios_per_class.mean().item()
 
 
-def compute_decision_intrusion(
+def compute_decision_intrusion_ratio_mean(
     geo_prototypes: torch.Tensor,
     class_means: torch.Tensor,
     proto_areas: torch.Tensor = None,
@@ -103,7 +91,7 @@ def compute_decision_intrusion(
 
     dir_per_class = intrusion / safe_proto_areas
 
-    return dir_per_class.mean().item(), dir_per_class
+    return dir_per_class.mean().item()
 
 
 def compute_effective_width(class_geo_prototypes: torch.Tensor) -> torch.Tensor:
@@ -156,10 +144,10 @@ def compute_collapse_metrics(geo_prototypes: torch.Tensor, class_means: torch.Te
     )
 
     # 3. PCR (Recall-oriented: Did we lose data?)
-    pcr = compute_pcr(geo_prototypes, class_means)
+    pcr_mean = compute_prototype_collapse_ratio_mean(geo_prototypes, class_means)
 
     # 4. DIR (Precision-oriented: Are we invading others / hollow?)
-    dir_mean, dir_per_class = compute_decision_intrusion(
+    dir_mean = compute_decision_intrusion_ratio_mean(
         geo_prototypes, class_means, proto_area, data_area
     )
 
@@ -167,19 +155,18 @@ def compute_collapse_metrics(geo_prototypes: torch.Tensor, class_means: torch.Te
     widths = compute_effective_width(class_means)
 
     # 6. Area Analysis
-    area_diff = proto_area - data_area
+    # area_diff = proto_area - data_area
 
     return {
         "Boundary Deviation (ABD)": abd,
-        "Prototype Collapse Ratio (PCR)": pcr,  # High = Data Spillover (False Negatives)
-        "Decision Intrusion Ratio (DIR)": dir_mean,  # High = Empty Space/Aggression (False Positives)
-        "DIR Per Class": dir_per_class,  # Useful to identify which classes are aggressive
+        "Prototype Collapse Ratio Average (PCR)": pcr_mean,  # High = Data Spillover (False Negatives)
+        "Decision Intrusion Ratio Average (DIR)": dir_mean,  # High = Empty Space/Aggression (False Positives)
         "Effective Width Average": widths.mean().item(),
         "Effective Width Std": widths.std().item(),
         "Spherical Voronoi Distortion": distortion,
-        "Area Diff (Proto - Data)": area_diff,  # Positive = Aggressive, Negative = Collapsed
-        "Proto Areas": proto_area,
-        "Data Areas": data_area,
+        # "Area Diff (Proto - Data)": area_diff,  # Positive = Aggressive, Negative = Collapsed
+        # "Proto Areas": proto_area,
+        # "Data Areas": data_area,
     }
 
 
