@@ -29,13 +29,12 @@ from utils.calc import (
     evaluate_etf_proximity,
     geodesic_variance,
     geometric_median,
-    l2_norm,
     mean_resultant_length,
     pairwise_angular_dispersion,
     spherical_davies_bouldin,
     spherical_silhouette_score,
     prototype_alignment,
-    compute_collapse_metrics,
+    compute_distortion_metrics,
 )
 from utils.string import print_dict_pipe
 from utils.logger import log
@@ -83,7 +82,7 @@ class Trainer:
             self.model_config.S0,
             device=self.train_config.DEVICE,
         ).detach()  # ✅ 修复：添加 detach()
-        self.current_kappas_norm = torch.full(
+        self.current_kappas = torch.full(
             (self.num_classes,),
             0,
             device=self.train_config.DEVICE,
@@ -187,8 +186,6 @@ class Trainer:
         r = torch.softmax(u / C, dim=0) * C  # mean = 1
         scales = s0 * r  # mean = s0
 
-        # ============================================================
-
         # ===== difficulty-aware weight omega_k =====
         kappas_np = kappas.detach().cpu().numpy()
         mu_k = np.mean(kappas_np)
@@ -225,7 +222,7 @@ class Trainer:
             psis.append(psi)
             margins[c] = self.model_config.M0 * psi
 
-        return (margins.detach(), scales.detach(), kappas_norm.detach(), psis, gamma)
+        return (margins.detach(), scales.detach(), kappas.detach(), psis, gamma)
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -353,11 +350,13 @@ class Trainer:
         cwe_metrics = MetricCalculator.calculate_l2_metrics(
             all_pred_class_indices, all_truth_class_keys, self.index_to_class
         )
+        all_val_embeddings_np = np.concatenate(all_val_embeddings, axis=0)
         clustering_metrics = self._calculate_clustering_metrics(
-            np.concatenate(all_val_embeddings, axis=0),
+            all_val_embeddings_np,
             [self.class_to_index[k] for k in all_truth_class_keys],
             all_pred_class_indices,
         )
+        all_val_embeddings_tensor = torch.from_numpy(all_val_embeddings_np)
 
         geo_prototype_mrl = mean_resultant_length(
             self.train_geo_prototypes.cpu().numpy()
@@ -381,13 +380,15 @@ class Trainer:
 
         geo_prototypes_etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
 
-        collapse_metrics = compute_collapse_metrics(
-            self.train_geo_prototypes, self.train_avg_prototypes
+        distortion_metrics = compute_distortion_metrics(
+            all_val_embeddings_tensor,
+            all_truth_class_indices,
+            self.train_avg_prototypes.cpu(),
         )
 
         # 可视化部分保持不变
         VisualizationHelper.draw_plot_umap(
-            np.concatenate(all_val_embeddings, axis=0),
+            all_val_embeddings_np,
             all_truth_class_keys,
             self.train_config.UMAP_OUTPUT_DIR,
             f"{epoch}.svg",
@@ -433,7 +434,7 @@ class Trainer:
             binary_metrics,
             cwe_metrics,
             geo_prototypes_etf_status,
-            collapse_metrics,
+            distortion_metrics,
         )
 
     def train(self):
@@ -507,10 +508,6 @@ class Trainer:
 
                     loss_kappa = kappa_loss(logits, truth_class_indices)
 
-                    # ===== Prototype–Prototype Consistency =====
-                    weight_prototypes = F.normalize(
-                        self.model.kappaface_head.weight, dim=1
-                    )
                     loss = loss_kappa
 
                 self.scaler.scale(loss).backward()
@@ -541,7 +538,7 @@ class Trainer:
                 (
                     self.current_margins,
                     self.current_scales,
-                    self.current_kappas_norm,
+                    self.current_kappas,
                     self.current_psis,
                     self.current_gamma,
                 ) = self._compute_adaptive_params(
@@ -591,7 +588,7 @@ class Trainer:
                 binary_metrics,
                 cwe_metrics,
                 geo_prototypes_etf_status,
-                collapse_metrics,
+                distortion_metrics,
             ) = self._evaluate_epoch(val_loader, epoch)
 
             log.print(
@@ -599,7 +596,7 @@ class Trainer:
                 f"Gamma: {self.current_gamma} | "
                 f"Scales: {self.current_scales.cpu().numpy()} | "
                 f"Margins: {self.current_margins.cpu().numpy()} | "
-                f"Kappas Norm: {self.current_kappas_norm.cpu().numpy()} | "
+                f"Kappas: {self.current_kappas.cpu().numpy()} | "
                 f"Psis: {[f'{x:.4f}' for x in self.current_psis]}",
             )
 
@@ -636,7 +633,7 @@ class Trainer:
                 f"Between Class Margin Average: {geo_prototype_bcm[1]}"
             )
 
-            log.print("[Collapse Metrics] ", print_dict_pipe(collapse_metrics))
+            log.print("[Distortion Metrics] ", print_dict_pipe(distortion_metrics))
 
             log.print(
                 "[Binary Confusion Matrix] "
@@ -647,7 +644,7 @@ class Trainer:
             )
 
             log.print(
-                f"[Vul/Non-vul Binary Classification] "
+                f"[Vul/Non-vul Binary Classification] ",
                 f"Binary MCC: {binary_metrics['mcc']:.4f} | "
                 f"Binary F1: {binary_metrics['f1']:.4f} | "
                 f"Binary Recall: {binary_metrics['recall']:.4f} | "
@@ -697,7 +694,7 @@ class Trainer:
                     max_checkpoints=self.train_config.MAX_CHECKPOINTS,
                 )
                 log.print(
-                    f"✅ Best model saved at new pareto front."
+                    f"✅ Best model saved at new pareto front. "
                     f"Binary-F1={current_binary_f1:.4f}, Macro-F1={current_macro_f1:.4f}. "
                 )
             else:

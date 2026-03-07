@@ -8,10 +8,9 @@ class VulnerabilityDataset(torch.utils.data.Dataset):
     def __init__(self, data, config: ModelConfig):
         self.data = data
         self.tokenizer = AutoTokenizer.from_pretrained(config.BACKBONE_REPO)
-        # The UniCoderX and other early RoBERTa-based model does not specify the max_length, which may cause OOM. 
+        # The UniCoderX and other early RoBERTa-based model does not specify the max_length, which may cause OOM.
         # We set it to 2048 to prevent OOM, which is also the max length for most code models.
         self.max_length = min(self.tokenizer.model_max_length, 512)
-        
 
     def __len__(self) -> int:
         return len(self.data)

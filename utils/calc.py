@@ -1,13 +1,12 @@
+from typing import Dict, List
+
 import numpy as np
 from sklearn.metrics import calinski_harabasz_score
+from scipy.special import betainc, gamma
 import torch
 from torch.functional import F
-from scipy.spatial import SphericalVoronoi
-
-# -------------------- Collapse Metrics --------------------
-
-import torch
-import torch.nn.functional as F
+import numpy as np
+from scipy.optimize import brentq
 
 
 def l2_norm(x: torch.Tensor) -> torch.Tensor:
@@ -15,158 +14,56 @@ def l2_norm(x: torch.Tensor) -> torch.Tensor:
     return F.normalize(x, p=2, dim=-1)
 
 
-def pairwise_angle(x: torch.Tensor) -> torch.Tensor:
+def compute_distortion_metrics(embs, class_indices, avg_prototypes):
     """
-    Compute pairwise angles (radians) between rows of x
-    x: (N, D) tensor, assumed L2-normalized
+    embs: np.array of length N, each element is a torch tensor of shape (1,D)
+    class_indices: np.array of shape [N,]
+    avg_prototypes: torch tensor of shape [C,D], L2 normalized
     """
-    cos = x @ x.T
-    cos = torch.clamp(cos, -1.0, 1.0)
-    return torch.acos(cos)
+    # 1. 将 embs 转成 torch tensor [N,D]
+    embs_tensor = torch.stack(
+        [
+            e.squeeze(0) if isinstance(e, torch.Tensor) else torch.tensor(e).squeeze(0)
+            for e in embs
+        ],
+        dim=0,
+    )  # [N,D]
+    class_indices = torch.tensor(class_indices)  # [N,]
 
+    C = avg_prototypes.shape[0]
 
-def compute_abd(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> float:
-    """
-    Angular Boundary Deviation (ABD)
-    Measures the average absolute difference between prototype boundaries and data boundaries.
-    """
-    W = l2_norm(geo_prototypes)
-    M = l2_norm(class_means)
+    # 2. 计算余弦相似度
+    similarities = embs_tensor @ avg_prototypes.T  # [N,C]
 
-    # We compare the pairwise angle matrices directly
-    proto_angles = pairwise_angle(W)
-    mean_angles = pairwise_angle(M)
+    # 3. argmax 决策
+    pred = similarities.argmax(dim=1)  # [N,]
 
-    C = W.shape[0]
-    # Exclude diagonal (self-comparison is 0)
-    mask = ~torch.eye(C, dtype=torch.bool, device=W.device)
+    # 4. 初始化统计量
+    intrusion_list = []
+    collapse_list = []
 
-    diff = torch.abs(proto_angles[mask] - mean_angles[mask])
-    abd = torch.sum(diff) / (C * (C - 1))
-    return abd.item()
+    # 5. 遍历类别对计算 intrusion / collapse
+    for i in range(C):
+        for j in range(i + 1, C):
+            mask_i = class_indices == i
+            if mask_i.sum() > 0:
+                intrusion = (pred[mask_i] == j).float().mean()
+                intrusion_list.append(intrusion)
+            mask_j = class_indices == j
+            if mask_j.sum() > 0:
+                collapse = (pred[mask_j] == i).float().mean()
+                collapse_list.append(collapse)
 
-
-def compute_prototype_collapse_ratio_mean(geo_prototypes: torch.Tensor, class_means: torch.Tensor) -> float:
-    W = l2_norm(geo_prototypes)
-    M = l2_norm(class_means)
-
-    proto_angles = pairwise_angle(W)
-    mean_angles = pairwise_angle(M)
-
-    mask = ~torch.eye(W.shape[0], dtype=torch.bool, device=W.device)
-    safe_proto_angles = torch.clamp(proto_angles[mask], min=1e-6)
-
-    excess = torch.relu(mean_angles[mask] - proto_angles[mask])
-    ratios_per_class = excess / safe_proto_angles
-
-    return ratios_per_class.mean().item()
-
-
-def compute_decision_intrusion_ratio_mean(
-    geo_prototypes: torch.Tensor,
-    class_means: torch.Tensor,
-    proto_areas: torch.Tensor = None,
-    data_areas: torch.Tensor = None,
-) -> float:
-    W = l2_norm(geo_prototypes)
-    M = l2_norm(class_means)
-    C = W.shape[0]
-
-    # Re-calculate areas if not provided (to keep function standalone, though passing is more efficient)
-    if proto_areas is None or data_areas is None:
-        # Approximation: Sum of angles to all other points as a proxy for "cell size" influence
-        # Note: This is the same logic as your spherical_voronoi_distortion
-        proto_sums = torch.sum(pairwise_angle(W), dim=1)
-        data_sums = torch.sum(pairwise_angle(M), dim=1)
-
-        proto_areas = proto_sums / proto_sums.sum()
-        data_areas = data_sums / data_sums.sum()
-
-    # Prevent division by zero
-    safe_proto_areas = torch.clamp(proto_areas, min=1e-9)
-
-    # Calculate intrusion: How much bigger is the Proto Cell compared to Data Spread?
-    # If proto_area > data_area, the prototype claims space the data doesn't fill.
-    intrusion = torch.relu(proto_areas - data_areas)
-
-    dir_per_class = intrusion / safe_proto_areas
-
-    return dir_per_class.mean().item()
-
-
-def compute_effective_width(class_geo_prototypes: torch.Tensor) -> torch.Tensor:
-    """
-    Effective angular width per class (Average distance to other class centers)
-    """
-    M = l2_norm(class_geo_prototypes)
-    angles = pairwise_angle(M)
-    mask = ~torch.eye(M.shape[0], dtype=torch.bool, device=M.device)
-
-    widths = []
-    for i in range(M.shape[0]):
-        widths.append(angles[i, mask[i]].mean())
-    return torch.stack(widths)
-
-
-def spherical_voronoi_distortion(
-    geo_prototypes: torch.Tensor, class_means: torch.Tensor
-):
-    """
-    Spherical Voronoi distortion using torch only (approximate by angles)
-    Returns distortion score and the area vectors for reuse.
-    """
-    W = l2_norm(geo_prototypes)
-    M = l2_norm(class_means)
-
-    # Compute "cell area" approximation: sum of angles to other points
-    # A larger sum of angles to neighbors implies a larger "influence zone" in this simplified metric
-    proto_sums = torch.sum(pairwise_angle(W), dim=1)
-    data_sums = torch.sum(pairwise_angle(M), dim=1)
-
-    proto_area = proto_sums / proto_sums.sum()
-    data_area = data_sums / data_sums.sum()
-
-    distortion = torch.mean(torch.abs(proto_area - data_area))
-
-    return distortion.item(), proto_area, data_area
-
-
-def compute_collapse_metrics(geo_prototypes: torch.Tensor, class_means: torch.Tensor):
-    """
-    Comprehensive metrics for Spherical Prototype Collapse.
-    """
-    # 1. Boundary Deviation
-    abd = compute_abd(geo_prototypes, class_means)
-
-    # 2. Preliminary Areas (Reuse for efficiency)
-    distortion, proto_area, data_area = spherical_voronoi_distortion(
-        geo_prototypes, class_means
+    avg_intrusion = (
+        torch.tensor(intrusion_list).mean().item() if intrusion_list else 0.0
     )
-
-    # 3. PCR (Recall-oriented: Did we lose data?)
-    pcr_mean = compute_prototype_collapse_ratio_mean(geo_prototypes, class_means)
-
-    # 4. DIR (Precision-oriented: Are we invading others / hollow?)
-    dir_mean = compute_decision_intrusion_ratio_mean(
-        geo_prototypes, class_means, proto_area, data_area
-    )
-
-    # 5. Width Statistics
-    widths = compute_effective_width(class_means)
-
-    # 6. Area Analysis
-    # area_diff = proto_area - data_area
+    avg_collapse = torch.tensor(collapse_list).mean().item() if collapse_list else 0.0
+    avg_distortion = avg_intrusion + avg_collapse
 
     return {
-        "Boundary Deviation (ABD)": abd,
-        "Prototype Collapse Ratio Average (PCR)": pcr_mean,  # High = Data Spillover (False Negatives)
-        "Decision Intrusion Ratio Average (DIR)": dir_mean,  # High = Empty Space/Aggression (False Positives)
-        "Effective Width Average": widths.mean().item(),
-        "Effective Width Std": widths.std().item(),
-        "Spherical Voronoi Distortion": distortion,
-        # "Area Diff (Proto - Data)": area_diff,  # Positive = Aggressive, Negative = Collapsed
-        # "Proto Areas": proto_area,
-        # "Data Areas": data_area,
+        "Decision Intrusion Area": avg_intrusion,
+        "Decision Collapse Area": avg_collapse,
+        "Distortion Area": avg_distortion,
     }
 
 
@@ -187,23 +84,6 @@ def geometric_median(
     return y
 
 
-def pairwise_angle(x: torch.Tensor) -> torch.Tensor:
-    """
-    Compute pairwise angles (radians) between rows of x
-    Args:
-        x: (N, D) tensor, assumed already L2-normalized
-    Returns:
-        (N, N) tensor of angles in radians
-    """
-    # 计算余弦相似度矩阵
-    cos = x @ x.T
-    # 限制在 [-1, 1] 防止数值溢出
-    cos = torch.clamp(cos, -1.0, 1.0)
-    # 计算弧度角
-    angles = torch.acos(cos)
-    return angles
-
-
 def l2_norm(x):
     return F.normalize(x, p=2, dim=-1)
 
@@ -211,25 +91,6 @@ def l2_norm(x):
 def cosine_similarity_torch(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     """Compute cosine similarity between x and y (both normalized)"""
     return torch.sum(x * y, dim=-1)
-
-
-def spherical_cell_areas(points):
-    """
-    计算单位球面 Voronoi cell 面积
-    """
-    sv = SphericalVoronoi(points)
-    sv.sort_vertices_of_regions()
-
-    areas = []
-
-    for region in sv.regions:
-        vertices = sv.vertices[region]
-
-        area = SphericalVoronoi.calculate_areas(SphericalVoronoi(vertices)).sum()
-
-        areas.append(area)
-
-    return np.array(areas)
 
 
 def evaluate_etf_proximity(geo_prototypes: torch.Tensor):
@@ -319,18 +180,18 @@ def evaluate_etf_proximity(geo_prototypes: torch.Tensor):
 
     return {
         # pairwise cosine diagnostics
-        "distance_to_mean_interclass_cosine": distance_to_mean_intraclass_cosine,
-        "std_interclass_cosine": std_interclass_cosine,
-        "max_abs_cosine_deviation": max_abs_cosine_deviation,
-        "mse_to_simplex_structure": mse_to_simplex_structure,
+        "Distance to Mean Interclass Cosine": distance_to_mean_intraclass_cosine,
+        "Std Interclass Cosine": std_interclass_cosine,
+        "Max Abs Cosine Deviation": max_abs_cosine_deviation,
+        "MSE to Simplex Structure": mse_to_simplex_structure,
         # frame potential diagnostics
-        "frame_potential": frame_potential,
-        "optimal_frame_potential": optimal_frame_potential,
-        "frame_potential_ratio": frame_potential_ratio,
+        "Frame Potential": frame_potential,
+        "Optimal Frame Potential": optimal_frame_potential,
+        "Frame Potential Ratio": frame_potential_ratio,
         # normalization sanity
-        "prototype_norm_std": prototype_norm_std,
+        "Prototype Norm Std": prototype_norm_std,
         # overall heuristic score
-        "etf_alignment_score": etf_alignment_score,
+        "ETF Alignment Score": etf_alignment_score,
     }
 
 
