@@ -9,7 +9,7 @@ from tqdm import tqdm
 from utils.config import EvalConfig, ModelConfig
 from utils.aegis import AEGISModel
 from utils.dataset import VulnerabilityDataset, custom_collate_fn
-from utils.metrics import MetricCalculator
+from utils.metrics import ClassificationMetricCalculator
 from utils.visual import VisualizationHelper
 from utils.serialize import save_to_json
 
@@ -95,7 +95,7 @@ class Evaluator:
                     batch["input_ids"].to(self.eval_config.DEVICE),
                     batch["attention_mask"].to(self.eval_config.DEVICE),
                 )
-                pred_indices = MetricCalculator.hierarchical_decision(
+                pred_indices = ClassificationMetricCalculator.hierarchical_decision(
                     embs, self.geo_prototypes
                 )
                 all_pred_class_indices.extend(pred_indices)
@@ -109,10 +109,10 @@ class Evaluator:
             [self.idx_to_class[idx][0] for idx in all_pred_class_indices]
         )
 
-        binary_metrics = MetricCalculator.calculate_l1_metrics(
+        binary_metrics = ClassificationMetricCalculator.calculate_l1_metrics(
             y_true_binary, y_pred_binary
         )
-        cwe_metrics = MetricCalculator.calculate_l2_metrics(
+        cwe_metrics = ClassificationMetricCalculator.calculate_l2_metrics(
             all_pred_class_indices, all_truth_class_keys, self.idx_to_class
         )
 

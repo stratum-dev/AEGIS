@@ -6,35 +6,26 @@ from collections import Counter
 import numpy as np
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import (
-    adjusted_mutual_info_score,
-    adjusted_rand_score,
-    normalized_mutual_info_score,
-)
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from utils.config import ModelConfig, TrainConfig
-from utils.metrics import MetricCalculator
+from utils.metrics import (
+    ClassificationMetricCalculator,
+    ETFMetricCalculator,
+    DistortionMetricCalculator,
+    ClusteringMetricCalculator,
+    GeometryMetricCalculator,
+)
 from utils.dataset import custom_collate_fn
 from utils.visual import VisualizationHelper
 from utils.aegis import AEGISModel
-from utils.loss import kappa_loss, prototype_alignment_loss
+from utils.loss import kappa_loss
 from utils.checkpoint import save_checkpoint_with_limit
 from utils.calc import (
-    angular_variance,
-    between_class_angular_margin,
     estimate_vmf_concentration,
-    evaluate_etf_proximity,
-    geodesic_variance,
     geometric_median,
-    mean_resultant_length,
-    pairwise_angular_dispersion,
-    spherical_davies_bouldin,
-    spherical_silhouette_score,
-    prototype_alignment,
-    compute_distortion_metrics,
 )
 from utils.string import print_dict_pipe
 from utils.logger import log
@@ -256,34 +247,6 @@ class Trainer:
                 prototypes[c] = geometric_median(embeddings[mask])
         return F.normalize(prototypes, p=2, dim=1)
 
-    def _calculate_clustering_metrics(self, embeddings, true_labels, pred_labels):
-        true_labels = np.array(true_labels)
-        pred_labels = np.array(pred_labels)
-
-        silhouette_avg = (
-            spherical_silhouette_score(embeddings, pred_labels)
-            if len(set(pred_labels)) > 1
-            else 0
-        )
-
-        dbi_score = (
-            spherical_davies_bouldin(embeddings, pred_labels)
-            if len(set(pred_labels)) > 1
-            else float("inf")
-        )
-
-        nmi_score = normalized_mutual_info_score(true_labels, pred_labels)
-        ami_score = adjusted_mutual_info_score(true_labels, pred_labels)
-        ari_score = adjusted_rand_score(true_labels, pred_labels)
-
-        return {
-            "SH": silhouette_avg,
-            "NMI": nmi_score,
-            "AMI": ami_score,
-            "ARI": ari_score,
-            "DBI": dbi_score,
-        }
-
     def _evaluate_epoch(self, val_loader, epoch):
         all_pred_class_indices = []
         all_truth_class_indices = []
@@ -325,9 +288,11 @@ class Trainer:
 
                 all_val_embeddings.append(embs.detach().cpu().numpy())
 
-                pred_class_indices = MetricCalculator.hierarchical_decision(
-                    embs,
-                    self.train_geo_prototypes,
+                pred_class_indices = (
+                    ClassificationMetricCalculator.hierarchical_decision(
+                        embs,
+                        self.train_geo_prototypes,
+                    )
                 )
                 all_pred_class_indices.extend(pred_class_indices)
                 all_truth_class_indices.extend(truth_class_indices)
@@ -344,43 +309,30 @@ class Trainer:
             [self.index_to_class[idx][0] for idx in all_pred_class_indices]
         )
 
-        binary_metrics = MetricCalculator.calculate_l1_metrics(
+        binary_metrics = ClassificationMetricCalculator.calculate_l1_metrics(
             truth_binary, pred_binary
         )
-        cwe_metrics = MetricCalculator.calculate_l2_metrics(
+        cwe_metrics = ClassificationMetricCalculator.calculate_l2_metrics(
             all_pred_class_indices, all_truth_class_keys, self.index_to_class
         )
         all_val_embeddings_np = np.concatenate(all_val_embeddings, axis=0)
-        clustering_metrics = self._calculate_clustering_metrics(
+        clustering_metrics = ClusteringMetricCalculator.calculate_clustering_metrics(
             all_val_embeddings_np,
             [self.class_to_index[k] for k in all_truth_class_keys],
             all_pred_class_indices,
         )
         all_val_embeddings_tensor = torch.from_numpy(all_val_embeddings_np)
 
-        geo_prototype_mrl = mean_resultant_length(
-            self.train_geo_prototypes.cpu().numpy()
-        )
-        geo_prototype_angular_var = angular_variance(
-            self.train_geo_prototypes.cpu().numpy()
-        )
-        geo_prototype_pariwise_dispersion = pairwise_angular_dispersion(
-            self.train_geo_prototypes.cpu().numpy()
-        )
-        geo_prototype_geodesic_variance = geodesic_variance(
-            self.train_geo_prototypes.cpu().numpy()
-        )
-        geo_protptype_bcm = between_class_angular_margin(
-            self.train_geo_prototypes.cpu().numpy()
-        )
-        geo_weight_protptype_alignment = prototype_alignment(
+        geometry_metrics = GeometryMetricCalculator.calculate_geometry_metrics(
             self.train_geo_prototypes.cpu().numpy(),
             self.train_weight_prototypes.cpu().numpy(),
         )
 
-        geo_prototypes_etf_status = evaluate_etf_proximity(self.train_geo_prototypes)
+        etf_metrics = ETFMetricCalculator.evaluate_etf_proximity(
+            self.train_geo_prototypes
+        )
 
-        distortion_metrics = compute_distortion_metrics(
+        distortion_metrics = DistortionMetricCalculator.compute_distortion_metrics(
             all_val_embeddings_tensor,
             all_truth_class_indices,
             self.train_avg_prototypes.cpu(),
@@ -424,16 +376,11 @@ class Trainer:
         return (
             avg_val_loss,
             avg_val_kappa_loss,
-            geo_prototype_mrl,
-            geo_prototype_angular_var,
-            geo_prototype_pariwise_dispersion,
-            geo_prototype_geodesic_variance,
-            geo_protptype_bcm,
-            geo_weight_protptype_alignment,
+            geometry_metrics,
             clustering_metrics,
             binary_metrics,
             cwe_metrics,
-            geo_prototypes_etf_status,
+            etf_metrics,
             distortion_metrics,
         )
 
@@ -578,16 +525,11 @@ class Trainer:
             (
                 avg_combined_val_loss,
                 avg_val_kappa_loss,
-                geo_prototype_mrl,
-                geo_prototype_angular_var,
-                geo_prototype_pariwise_dispersion,
-                geo_prototype_geodesic_var,
-                geo_prototype_bcm,
-                geo_weight_protptype_alignment,
+                geometry_metrics,
                 clustering_metrics,
                 binary_metrics,
                 cwe_metrics,
-                geo_prototypes_etf_status,
+                etf_metrics,
                 distortion_metrics,
             ) = self._evaluate_epoch(val_loader, epoch)
 
@@ -602,7 +544,7 @@ class Trainer:
 
             log.print(
                 "[Geometric Prototypes ETF Proximity] ",
-                print_dict_pipe(geo_prototypes_etf_status),
+                print_dict_pipe(etf_metrics),
             )
 
             log.print(
@@ -622,15 +564,8 @@ class Trainer:
             )
 
             log.print(
-                "[Geometric Prototype Metrics] "
-                f"MRL: {geo_prototype_mrl} | "
-                f"Geo-Weight Prototype alignment: {geo_weight_protptype_alignment} | "
-                f"Angular Var: {geo_prototype_angular_var} | "
-                f"Pairwise Disperation Average: {geo_prototype_pariwise_dispersion[0]} | "
-                f"Pairwise Disperation Std: {geo_prototype_pariwise_dispersion[1]} | "
-                f"Geodesic Variance: {geo_prototype_geodesic_var} | "
-                f"Between Class Margin Minimun: {geo_prototype_bcm[0]} | "
-                f"Between Class Margin Average: {geo_prototype_bcm[1]}"
+                "[Geometric Prototype Metrics] ",
+                print_dict_pipe(geometry_metrics)
             )
 
             log.print("[Distortion Metrics] ", print_dict_pipe(distortion_metrics))

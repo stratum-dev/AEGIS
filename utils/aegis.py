@@ -3,7 +3,7 @@ import torch
 from transformers import AutoConfig, AutoModelForTextEncoding
 import torch.nn as nn
 import torch.nn.functional as F
-from utils.calc import l2_norm
+from utils.calc import _l2_norm
 
 
 class RoBERTaEncoder(nn.Module):
@@ -55,7 +55,7 @@ class KappaLossClassifierHead(nn.Module):
 
     def forward(self, x, labels, scales, margins):
         # Normalize weight
-        weight_norm = l2_norm(self.weight)
+        weight_norm = _l2_norm(self.weight)
         # Cosine similarity matrix: (B, C)
         cos_theta = torch.mm(x, weight_norm.t())
         # Clamp for numerical stability
@@ -119,7 +119,7 @@ class AEGISModel(nn.Module):
         self, input_ids, attention_mask, labels=None, scales=None, margins=None
     ):
         features = self.encoder(input_ids, attention_mask)
-        features_norm = l2_norm(features)
+        features_norm = _l2_norm(features)
         if labels is not None and margins is not None:
             logits = self.kappaface_head(features_norm, labels, scales, margins)
             return features_norm, logits
