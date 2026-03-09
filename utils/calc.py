@@ -1,7 +1,11 @@
-import numpy as np
-from sklearn.metrics import calinski_harabasz_score
 import torch
 import numpy as np
+import torch.nn.functional as F
+
+
+def l2_norm(x: torch.Tensor) -> torch.Tensor:
+    """L2 normalize along last dimension"""
+    return F.normalize(x, p=2, dim=-1)
 
 
 def geometric_median(

@@ -564,8 +564,7 @@ class Trainer:
             )
 
             log.print(
-                "[Geometric Prototype Metrics] ",
-                print_dict_pipe(geometry_metrics)
+                "[Geometric Prototype Metrics] ", print_dict_pipe(geometry_metrics)
             )
 
             log.print("[Distortion Metrics] ", print_dict_pipe(distortion_metrics))

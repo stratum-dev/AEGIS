@@ -13,7 +13,7 @@ from datetime import datetime
 DATASET_REPO = "codemetic/AEGIS-dataset"
 # Subset for above repo.
 # Avaliable at: "bigvul", "mvd", "megavul", "draper", "reposvul", "diversevul"
-SUBSET_NAME = "bigvul"
+SUBSET_NAME = "reposvul"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
