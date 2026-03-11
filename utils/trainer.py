@@ -72,14 +72,7 @@ class Trainer:
             (self.num_classes,),
             self.model_config.S0,
             device=self.train_config.DEVICE,
-        ).detach()  # ✅ 修复：添加 detach()
-        self.current_kappas = torch.full(
-            (self.num_classes,),
-            0,
-            device=self.train_config.DEVICE,
-        )
-        self.current_psis = [0] * self.num_classes
-        self.current_gamma = 0
+        ).detach()
 
         self.model: AEGISModel = AEGISModel(
             self.model_config.BACKBONE_REPO,
@@ -148,72 +141,6 @@ class Trainer:
             for k, v in counts.items()
             if k in self.class_to_index
         }
-
-    def _compute_adaptive_params(self, embeddings, labels):
-        margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
-        kappas = []
-        psis = []
-
-        # ===== estimate class-wise vMF concentration =====
-        for c in range(self.num_classes):
-            mask = labels == c
-            if mask.sum() == 0:
-                kappas.append(1e-6)
-                continue
-            class_embs = embeddings[mask]
-            kappa = estimate_vmf_concentration(class_embs)
-            kappas.append(kappa)
-
-        kappas = torch.tensor(kappas, device=self.train_config.DEVICE).clamp(min=1e-6)
-
-        C = self.num_classes
-        s0 = self.model_config.S0
-
-        # ============================================================
-        # ✅ Scheme 1: log-kappa softmax relative scaling (stable)
-        # ============================================================
-
-        u = torch.log(kappas)
-        r = torch.softmax(u / C, dim=0) * C  # mean = 1
-        scales = s0 * r  # mean = s0
-
-        # ===== difficulty-aware weight omega_k =====
-        kappas_np = kappas.detach().cpu().numpy()
-        mu_k = np.mean(kappas_np)
-        sigma_k = np.std(kappas_np) + 1e-8
-        kappas_norm = torch.from_numpy((kappas_np - mu_k) / sigma_k).to(
-            self.train_config.DEVICE
-        )
-
-        omega_k = 1 - torch.sigmoid(0.5 * kappas_norm)  # [C]
-
-        # ===== frequency-aware weight omega_n =====
-        omega_f_list = []
-        for c in range(self.num_classes):
-            n_c = self.class_counts.get(c, 1)
-            k = self.max_class_count
-            w = (torch.cos(torch.pi * torch.tensor(n_c) / k) + 1) / 2
-            omega_f_list.append(w.item())
-
-        omega_f = torch.tensor(omega_f_list, device=self.train_config.DEVICE)
-
-        # ===== Adaptive gamma via kappa stability =====
-        # gamma reflects reliability of kappa estimation
-        # larger variance -> rely more on concentration
-
-        kappa_std = torch.std(kappas)
-        kappa_mean = torch.mean(kappas).clamp(min=1e-6)
-
-        gamma = (kappa_std / (kappa_std + kappa_mean)).clamp(0.0, 1.0).item()
-
-        # gamma = 0.5
-        # ===== final margin =====
-        for c in range(self.num_classes):
-            psi = (gamma) * omega_k[c].item() + (1 - gamma) * omega_f[c].item()
-            psis.append(psi)
-            margins[c] = self.model_config.M0 * psi
-
-        return (margins.detach(), scales.detach(), kappas.detach(), psis, gamma)
 
     def _compute_average_prototypes(
         self, embeddings: torch.Tensor, class_indices: torch.Tensor
@@ -481,16 +408,6 @@ class Trainer:
                     self.train_config.DEVICE
                 )
 
-                # 基于在线特征计算自适应参数
-                (
-                    self.current_margins,
-                    self.current_scales,
-                    self.current_kappas,
-                    self.current_psis,
-                    self.current_gamma,
-                ) = self._compute_adaptive_params(
-                    online_embeddings, online_truth_classes
-                )
             else:
                 log.print(
                     "⚠️ No data processed in this epoch. Skipping adaptive param update."
@@ -534,12 +451,9 @@ class Trainer:
             ) = self._evaluate_epoch(val_loader, epoch)
 
             log.print(
-                "[Adaptive Parameters] "
-                f"Gamma: {self.current_gamma} | "
+                "[Parameters] "
                 f"Scales: {self.current_scales.cpu().numpy()} | "
                 f"Margins: {self.current_margins.cpu().numpy()} | "
-                f"Kappas: {self.current_kappas.cpu().numpy()} | "
-                f"Psis: {[f'{x:.4f}' for x in self.current_psis]}",
             )
 
             log.print(
