@@ -1,0 +1,11 @@
+*.backup.*
+*.temp.*
+output_*
+model_*
+models
+prog
+archive_*
+archive
+__pycache__
+temp
+result
