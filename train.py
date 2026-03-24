@@ -12,7 +12,7 @@ from datetime import datetime
 # The dataset repository
 DATASET_REPO = "codemetic/AEGIS-dataset"
 # Subset for above repo.
-# Avaliable at: "bigvul", "mvd", "megavul", "draper", "reposvul", "diversevul"
+# Avaliable at: "bigvul", "megavul", "reposvul", "diversevul"
 SUBSET_NAME = "diversevul"
 # The backbone repository
 # You can try these backbones also:
@@ -34,10 +34,10 @@ RANDOM_SEED = 42
 # ============================ Training Settings=================================
 # Fill your device here. "cuda","cuda:0","cuda:1","cuda:2", etc.
 # Mixed-precision relies on CUDA, and therefore training on CPU is NOT supported.
-DEVICE = "cuda:2"
+DEVICE = "cuda"
 MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
-MAX_CHECKPOINTS = 0
+MAX_CHECKPOINTS = 3
 OUTPUT_DIR = os.path.join(
     "models",
     f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}",
@@ -75,7 +75,11 @@ def main():
     log.print(f"Saved on position: {OUTPUT_DIR}")
 
     # Load data
-    dataset = load_dataset(model_config.DATASET_REPO, model_config.SUBSET_NAME,download_mode="reuse_cache_if_exists")
+    dataset = load_dataset(
+        model_config.DATASET_REPO,
+        model_config.SUBSET_NAME,
+        download_mode="reuse_cache_if_exists",
+    )
     train_data, val_data, test_data = dataset["train"], dataset["val"], dataset["test"]
 
     train_dataset = VulnerabilityDataset(train_data, model_config)

@@ -25,8 +25,9 @@ def geometric_median(
     return y
 
 
-def estimate_vmf_concentration(embeddings: torch.Tensor,
-                               prototype: torch.Tensor) -> float:
+def estimate_vmf_concentration(
+    embeddings: torch.Tensor, prototype: torch.Tensor
+) -> float:
 
     if embeddings.size(0) == 0:
         return 0.0
@@ -34,7 +35,7 @@ def estimate_vmf_concentration(embeddings: torch.Tensor,
     embeddings = torch.nn.functional.normalize(embeddings, dim=1)
     prototype = torch.nn.functional.normalize(prototype, dim=0)
 
-    cos_sim = torch.matmul(embeddings, prototype)   # (N)
+    cos_sim = torch.matmul(embeddings, prototype)  # (N)
     r = torch.mean(cos_sim).item()
 
     d = embeddings.size(1)

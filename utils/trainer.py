@@ -149,7 +149,7 @@ class Trainer:
             if k in self.class_to_index
         }
 
-    def _compute_adaptive_params(self, embeddings,weight_prototypes, labels):
+    def _compute_adaptive_params(self, embeddings, weight_prototypes, labels):
         margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
         kappas = []
         psis = []
@@ -471,8 +471,6 @@ class Trainer:
                     }
                 )
 
-
-
             if len(online_embeddings) > 0:
                 online_embeddings = torch.cat(online_embeddings, dim=0).to(
                     self.train_config.DEVICE
@@ -500,7 +498,7 @@ class Trainer:
                     self.current_psis,
                     self.current_gamma,
                 ) = self._compute_adaptive_params(
-                    online_embeddings,weight_prototypes, online_truth_classes
+                    online_embeddings, weight_prototypes, online_truth_classes
                 )
             else:
                 log.print(
