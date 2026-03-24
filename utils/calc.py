@@ -25,19 +25,25 @@ def geometric_median(
     return y
 
 
-def estimate_vmf_concentration(embeddings: torch.Tensor) -> float:
-    """
-    Estimate vMF concentration parameter κ from normalized embeddings.
-    embeddings: (N, D)
-    """
+def estimate_vmf_concentration(embeddings: torch.Tensor,
+                               prototype: torch.Tensor) -> float:
+
     if embeddings.size(0) == 0:
         return 0.0
-    mean_vec = torch.mean(embeddings, dim=0)
-    r = torch.norm(mean_vec).item()
+
+    embeddings = torch.nn.functional.normalize(embeddings, dim=1)
+    prototype = torch.nn.functional.normalize(prototype, dim=0)
+
+    cos_sim = torch.matmul(embeddings, prototype)   # (N)
+    r = torch.mean(cos_sim).item()
+
     d = embeddings.size(1)
+
     if r >= 1.0:
         r = 0.999999
     if r <= 0:
         return 0.0
+
     kappa = r * (d - r * r) / (1 - r * r)
+
     return max(kappa, 1e-6)

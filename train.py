@@ -13,7 +13,7 @@ from datetime import datetime
 DATASET_REPO = "codemetic/AEGIS-dataset"
 # Subset for above repo.
 # Avaliable at: "bigvul", "mvd", "megavul", "draper", "reposvul", "diversevul"
-SUBSET_NAME = "reposvul"
+SUBSET_NAME = "diversevul"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
@@ -24,7 +24,7 @@ BACKBONE_REPO = "Salesforce/codet5-base"
 # The descriptions for these hyperparameters was intruduced in paper.
 # Please refer the original paper to adjust the hyperparameters
 S0 = 30
-M0 = 0.3
+M0 = 0.25
 
 BATCH_SIZE = 40
 LEARNING_RATE = 2e-5
@@ -34,7 +34,7 @@ RANDOM_SEED = 42
 # ============================ Training Settings=================================
 # Fill your device here. "cuda","cuda:0","cuda:1","cuda:2", etc.
 # Mixed-precision relies on CUDA, and therefore training on CPU is NOT supported.
-DEVICE = "cuda:1"
+DEVICE = "cuda:2"
 MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
 MAX_CHECKPOINTS = 0
@@ -75,7 +75,7 @@ def main():
     log.print(f"Saved on position: {OUTPUT_DIR}")
 
     # Load data
-    dataset = load_dataset(model_config.DATASET_REPO, model_config.SUBSET_NAME)
+    dataset = load_dataset(model_config.DATASET_REPO, model_config.SUBSET_NAME,download_mode="reuse_cache_if_exists")
     train_data, val_data, test_data = dataset["train"], dataset["val"], dataset["test"]
 
     train_dataset = VulnerabilityDataset(train_data, model_config)

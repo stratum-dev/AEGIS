@@ -149,7 +149,7 @@ class Trainer:
             if k in self.class_to_index
         }
 
-    def _compute_adaptive_params(self, embeddings, labels):
+    def _compute_adaptive_params(self, embeddings,weight_prototypes, labels):
         margins = torch.zeros(self.num_classes, device=self.train_config.DEVICE)
         kappas = []
         psis = []
@@ -161,7 +161,7 @@ class Trainer:
                 kappas.append(1e-6)
                 continue
             class_embs = embeddings[mask]
-            kappa = estimate_vmf_concentration(class_embs)
+            kappa = estimate_vmf_concentration(class_embs, weight_prototypes[c])
             kappas.append(kappa)
 
         kappas = torch.tensor(kappas, device=self.train_config.DEVICE).clamp(min=1e-6)
@@ -471,7 +471,7 @@ class Trainer:
                     }
                 )
 
-            # ===== Epoch 结束后统一计算自适应参数（供下一 epoch 使用）=====
+
 
             if len(online_embeddings) > 0:
                 online_embeddings = torch.cat(online_embeddings, dim=0).to(
@@ -480,7 +480,18 @@ class Trainer:
                 online_truth_classes = torch.cat(online_truth_classes, dim=0).to(
                     self.train_config.DEVICE
                 )
+                # ===== Epoch 结束后统一计算自适应参数（供下一 epoch 使用）=====
 
+                self.train_avg_prototypes = self._compute_average_prototypes(
+                    online_embeddings, online_truth_classes
+                ).detach()
+                self.train_geo_prototypes = self._compute_geometric_prototypes(
+                    online_embeddings, online_truth_classes
+                ).detach()
+                weight_prototypes = self.model.kappaface_head.weight
+                self.train_weight_prototypes = F.normalize(
+                    weight_prototypes.detach(), dim=1
+                )
                 # 基于在线特征计算自适应参数
                 (
                     self.current_margins,
@@ -489,7 +500,7 @@ class Trainer:
                     self.current_psis,
                     self.current_gamma,
                 ) = self._compute_adaptive_params(
-                    online_embeddings, online_truth_classes
+                    online_embeddings,weight_prototypes, online_truth_classes
                 )
             else:
                 log.print(
@@ -509,18 +520,6 @@ class Trainer:
             if num_batches > 0:
                 avg_train_kappa_loss = total_kappa_loss / num_batches
                 avg_train_combined_loss = total_combined_loss / num_batches
-
-            # ===== 保存当前 epoch 的原型（从在线编码器计算）=====
-            if len(online_embeddings) > 0:
-                self.train_avg_prototypes = self._compute_average_prototypes(
-                    online_embeddings, online_truth_classes
-                ).detach()
-                self.train_geo_prototypes = self._compute_geometric_prototypes(
-                    online_embeddings, online_truth_classes
-                ).detach()
-                self.train_weight_prototypes = F.normalize(
-                    self.model.kappaface_head.weight.detach(), dim=1
-                )
 
             (
                 avg_combined_val_loss,
