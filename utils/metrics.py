@@ -66,155 +66,61 @@ class ClassificationMetricCalculator:
     @staticmethod
     def calculate_l2_metrics(
         all_pred_class_indices: List[int],
-        all_true_class_keys: List[Tuple[bool, str]],
+        all_true_class_indices: List[int],
         idx_to_class,
     ) -> Dict[str, Any]:
-        y_true_cwe: List[str] = []
-        y_pred_cwe: List[str] = []
+        cwe_metrics = {}
+        positive_indices = [i for i, y in enumerate(all_true_class_indices) if y != 0]
+        positive_label_idx = list(range(1, len(idx_to_class)))
 
-        for pred_idx, (true_label, true_cwe) in zip(
-            all_pred_class_indices, all_true_class_keys
-        ):
-            if not true_label:
-                continue  # Oracle: only GT vulnerable samples
-
-            y_true_cwe.append(true_cwe)
-
-            pred_label, pred_cwe = idx_to_class[pred_idx]
-
-            if not pred_label:
-                # predicted as non-vul → CWE prediction failure
-                y_pred_cwe.append("__UNKNOWN__")
-            else:
-                y_pred_cwe.append(pred_cwe)
-
-        unique_cwes = sorted(set(y_true_cwe))
-
-        if not unique_cwes:
-            return {
-                "per_class": {},
-                "macro": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "mcc": 0.0},
-                "micro": {"precision": 0.0, "recall": 0.0, "f1": 0.0},
+        y_true_pos = [all_true_class_indices[i] for i in positive_indices]
+        y_pred_pos = [all_pred_class_indices[i] for i in positive_indices]
+        pos_precisions = []
+        pos_recalls = []
+        pos_f1s = []
+        pos_mccs = []
+        per_class_metrics = {}
+        for c in positive_label_idx:
+            label_name = idx_to_class[c]
+            y_true_bin = [1 if y == c else 0 for y in y_true_pos]
+            y_pred_bin = [1 if y == c else 0 for y in y_pred_pos]
+            tp = sum(1 for t, p in zip(y_true_bin, y_pred_bin) if t == 1 and p == 1)
+            fp = sum(1 for t, p in zip(y_true_bin, y_pred_bin) if t == 0 and p == 1)
+            fn = sum(1 for t, p in zip(y_true_bin, y_pred_bin) if t == 1 and p == 0)
+            tn = sum(1 for t, p in zip(y_true_bin, y_pred_bin) if t == 0 and p == 0)
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = (
+                2 * precision * recall / (precision + recall)
+                if (precision + recall) > 0
+                else 0.0
+            )
+            mcc = matthews_corrcoef(y_true_bin, y_pred_bin)
+            mcc = 0.0 if np.isnan(mcc) else float(mcc)
+            per_class_metrics[label_name] = {
+                "tp": tp,
+                "fp": fp,
+                "tn": tn,
+                "fn": fn,
+                "support": int(tp + fn),
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "mcc": mcc,
             }
+            pos_precisions.append(precision)
+            pos_recalls.append(recall)
+            pos_f1s.append(f1)
+            pos_mccs.append(mcc)
 
-        # =========================
-        # Precision / Recall / F1
-        # =========================
-        micro_p, micro_r, micro_f1, _ = precision_recall_fscore_support(
-            y_true_cwe,
-            y_pred_cwe,
-            labels=unique_cwes,
-            average="micro",
-            zero_division=0,
-        )
-        macro_p, macro_r, macro_f1, _ = precision_recall_fscore_support(
-            y_true_cwe,
-            y_pred_cwe,
-            labels=unique_cwes,
-            average="macro",
-            zero_division=0,
-        )
-
-        per_class_report = classification_report(
-            y_true_cwe,
-            y_pred_cwe,
-            labels=unique_cwes,
-            zero_division=0,
-            output_dict=True,
-        )
-
-        # =========================
-        # Macro MCC (OVA, Oracle CWE)
-        # =========================
-        per_class_mcc = {}
-        macro_mcc_list = []
-        per_class_confusion = {}
-        for cwe in unique_cwes:
-            tp = fp = fn = tn = 0
-
-            for yt, yp in zip(y_true_cwe, y_pred_cwe):
-                if yt == cwe:
-                    if yp == cwe:
-                        tp += 1
-                    else:
-                        fn += 1
-                else:
-                    if yp == cwe:
-                        fp += 1
-                    else:
-                        tn += 1
-
-            per_class_confusion[cwe] = {
-                "TP": tp,
-                "FP": fp,
-                "FN": fn,
-                "TN": tn,
-            }
-
-        for cwe in unique_cwes:
-            y_true_ova = [1 if y == cwe else 0 for y in y_true_cwe]
-            y_pred_ova = [1 if y == cwe else 0 for y in y_pred_cwe]
-
-            mcc_val = matthews_corrcoef(y_true_ova, y_pred_ova)
-            mcc_val = 0.0 if np.isnan(mcc_val) else float(mcc_val)
-
-            per_class_mcc[cwe] = mcc_val
-            macro_mcc_list.append(mcc_val)
-
-        macro_mcc = float(np.mean(macro_mcc_list))
-
-        per_class_metrics = {
-            cwe: {
-                "precision": per_class_report[cwe]["precision"],
-                "recall": per_class_report[cwe]["recall"],
-                "f1-score": per_class_report[cwe]["f1-score"],
-                "support": per_class_report[cwe]["support"],
-                "mcc": per_class_mcc[cwe],
-                **per_class_confusion[cwe],
-            }
-            for cwe in unique_cwes
-        }
-
-        end2end_correct = 0
-        total = len(all_true_class_keys)
-        for pred_idx, (true_label, true_cwe) in zip(
-            all_pred_class_indices, all_true_class_keys
-        ):
-            # =========================
-            # GT: Non-vulnerable
-            # =========================
-            if not true_label:
-                pred_label, _ = idx_to_class[pred_idx]
-                if not pred_label:
-                    end2end_correct += 1
-
-            # =========================
-            # GT: Vulnerable
-            # =========================
-
-            pred_label, pred_cwe = idx_to_class[pred_idx]
-
-            if not pred_label:
-                continue  # predicted non-vul → wrong
-
-            if pred_cwe == true_cwe:
-                end2end_correct += 1
-
-        return {
+        cwe_metrics["macro"] = {
+            "precision": float(np.mean(pos_precisions)),
+            "recall": float(np.mean(pos_recalls)),
+            "f1": float(np.mean(pos_f1s)),
+            "mcc": float(np.mean(pos_mccs)),
             "per_class": per_class_metrics,
-            "macro": {
-                "precision": float(macro_p),
-                "recall": float(macro_r),
-                "f1": float(macro_f1),
-                "mcc": float(macro_mcc),
-            },
-            "micro": {
-                "precision": float(micro_p),
-                "recall": float(micro_r),
-                "f1": float(micro_f1),
-            },
-            "hier_acc": end2end_correct / total if total > 0 else 0.0,
         }
+        return cwe_metrics
 
 
 class ETFMetricCalculator:

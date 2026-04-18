@@ -44,13 +44,13 @@ class RoBERTaEncoder(nn.Module):
 
 
 class KappaLossClassifierHead(nn.Module):
-    def __init__(self, in_features, num_classes, scales, m0):
+    def __init__(self, dim, num_classes, scales, m0):
         super().__init__()
-        self.in_features = in_features
+        self.dim = dim
         self.num_classes = num_classes
         self.scales = scales
         self.m0 = m0
-        self.weight = nn.Parameter(torch.Tensor(num_classes, in_features))
+        self.weight = nn.Parameter(torch.Tensor(num_classes, dim))
         nn.init.xavier_uniform_(self.weight)
 
     def forward(self, x, labels, scales, margins):

@@ -13,7 +13,7 @@ from datetime import datetime
 DATASET_REPO = "codemetic/AEGIS-dataset"
 # Subset for above repo.
 # Avaliable at: "bigvul", "megavul", "reposvul", "diversevul"
-SUBSET_NAME = "diversevul"
+SUBSET_NAME = "bigvul"
 # The backbone repository
 # You can try these backbones also:
 # "microsoft/graphcodebert-base", "microsoft/codebert-base", "microsoft/unixcoder-base"
@@ -37,7 +37,7 @@ RANDOM_SEED = 42
 DEVICE = "cuda"
 MAX_EPOCHES = 100
 EARLY_STOP_PATIENCE = 20
-MAX_CHECKPOINTS = 3
+MAX_CHECKPOINTS = 0
 OUTPUT_DIR = os.path.join(
     "models",
     f"aegis_{BACKBONE_REPO.split('/')[1]}_{SUBSET_NAME}-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}",
